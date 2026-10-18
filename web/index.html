@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PXE 网络引导服务器</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">
+    <h1>PXE 网络引导服务器</h1>
+    <span class="sub">网络引导 / 支持 UEFI + BIOS</span>
+  </div>
+  <div class="status-bar">
+    <div class="stat"><label>服务器</label><span id="st-server">-</span></div>
+    <div class="stat"><label>运行时长</label><span id="st-uptime">-</span></div>
+    <div class="stat"><label>DHCP</label><span id="st-dhcp">-</span></div>
+  </div>
+  <div class="actions">
+    <button id="btn-bootfiles" class="secondary">引导文件</button>
+    <button id="btn-config" class="secondary">配置</button>
+  </div>
+</header>
+
+<main>
+  <aside id="side-panel">
+    <div class="panel">
+      <h3>客户端 / 租约 <span id="client-online-count" class="online-count"></span></h3>
+      <div id="client-list" class="client-list"><p class="empty-sm">暂无记录</p></div>
+    </div>
+    <div class="panel">
+      <h3>最近日志</h3>
+      <pre id="log-box" class="log-box"></pre>
+    </div>
+  </aside>
+</main>
+
+<!-- 配置弹窗 -->
+<div id="modal-config" class="modal hidden">
+  <div class="modal-box">
+    <h2>服务器配置</h2>
+    <div class="form-grid">
+      <label>服务器 IP<input id="cfg-ip" type="text"></label>
+      <label>HTTP 端口<input id="cfg-http" type="number"></label>
+      <label>DHCP 模式
+        <select id="cfg-dhcp-mode">
+          <option value="dhcp">完整 DHCP（唯一服务器）</option>
+          <option value="proxy">代理 DHCP（与路由器共存）</option>
+          <option value="off">关闭</option>
+        </select>
+      </label>
+      <label>地址池起始<input id="cfg-pool-start" type="text"></label>
+      <label>地址池结束<input id="cfg-pool-end" type="text"></label>
+      <label>网关（留空不发）<input id="cfg-gateway" type="text"></label>
+      <label>DNS（留空不发）<input id="cfg-dns" type="text"></label>
+      <label>菜单标题<input id="cfg-title" type="text"></label>
+      <label>MAC 过滤
+        <select id="cfg-mac-mode">
+          <option value="off">关闭</option>
+          <option value="allow">白名单</option>
+          <option value="deny">黑名单</option>
+        </select>
+      </label>
+      <label>MAC 列表（逗号分隔）<textarea id="cfg-mac-list" rows="3"></textarea></label>
+    </div>
+    <div class="modal-actions">
+      <button id="cfg-save" class="primary">保存并重启</button>
+      <button id="cfg-cancel" class="secondary">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- 引导文件弹窗 -->
+<div id="modal-bootfiles" class="modal hidden">
+  <div class="modal-box">
+    <h2>引导文件状态</h2>
+    <p class="hint">缺少的文件可运行 <code>tools\fetch_bootloader.py</code> 自动下载，或 <code>tools\build_grub.sh</code>（Linux）自行构建。</p>
+    <table id="bootfiles-table" class="bootfiles">
+      <thead><tr><th>文件</th><th>状态</th><th>说明</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="modal-actions">
+      <button id="bf-close" class="secondary">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>
