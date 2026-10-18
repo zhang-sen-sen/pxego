@@ -703,7 +703,12 @@ class PxeHttpHandler(BaseHTTPRequestHandler):
             return self._handle_upload()
 
         if path == "/api/config" and method in ("GET", "HEAD"):
-            return self._json(ctx.config.data)
+            # 实时读 config.json：与窗口启动器（launcher 直接写文件）保持显示一致
+            try:
+                with open(ctx.config.path, "r", encoding="utf-8") as _f:
+                    return self._json(json.load(_f))
+            except Exception:
+                return self._json(ctx.config.data)
 
         if path == "/api/config" and method == "PATCH":
             return self._handle_config_patch()

@@ -310,10 +310,46 @@ foreach ($_mi in $script:dhcpModeItems) {
     [void]$script:dhcpModeBox.Items.Add($_mi.Text)
     $script:dhcpModeMap[$_mi.Text] = $_mi.Val
 }
+$script:dhcpApplying = $true
 $script:dhcpModeBox.SelectedIndex = 0
 foreach ($_k in $script:dhcpModeMap.Keys) {
     if ($script:dhcpModeMap[$_k] -eq $cfg.dhcpMode) { $script:dhcpModeBox.SelectedItem = $_k; break }
 }
+$script:dhcpApplying = $false
+# DHCP 模式下拉框选中即生效：写配置并（服务运行中）自动重启，无需再点"应用"
+$script:dhcpModeBox.Add_SelectedIndexChanged({
+    if ($script:dhcpApplying) { return }
+    $sel = $script:dhcpModeBox.SelectedItem
+    if (-not $sel -or -not $script:dhcpModeMap.ContainsKey($sel)) { return }
+    $mode = $script:dhcpModeMap[$sel]
+    if ($mode -eq $cfg.dhcpMode) { return }
+    try { $d = Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $d = [PSCustomObject]@{} }
+    $d | Add-Member -NotePropertyName dhcp_mode -NotePropertyValue $mode -Force
+    $json = $d | ConvertTo-Json -Depth 5
+    [System.IO.File]::WriteAllText($cfgPath, $json, (New-Object System.Text.UTF8Encoding $false))
+    $cfg.dhcpMode = $mode
+    $msg = "DHCP 模式已切换为 $sel"
+    $running = Test-Service
+    if ($running) {
+        $lblState.Text = "$msg，正在重启服务..."
+        $lblDot.ForeColor = $DIM
+        $lblState.Refresh()
+        Stop-Project
+        Start-Sleep -Milliseconds 500
+        $ok = Start-Service
+        if ($ok) {
+            Update-State
+            $lblState.Text = "$msg，服务已重启生效"
+            $lblDot.ForeColor = $GREEN
+        } else {
+            $lblState.Text = "$msg，服务重启失败：$($script:lastErr)"
+            $lblDot.ForeColor = $RED
+        }
+    } else {
+        $lblState.Text = "$msg（点启动并打开）"
+        $lblDot.ForeColor = $DIM
+    }
+})
 $script:portPanel.Controls.Add($script:dhcpModeBox)
 
 $btnPorts = New-Object System.Windows.Forms.Button
@@ -592,6 +628,7 @@ function Apply-Ports {
     $sel = $script:dhcpModeBox.SelectedItem
     $mode = if ($sel -and $script:dhcpModeMap.ContainsKey($sel)) { $script:dhcpModeMap[$sel] } else { $cfg.dhcpMode }
     $modeChanged = ($mode -ne $cfg.dhcpMode)
+    $portChanged = ($hp -ne $cfg.port)
     try { $d = Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $d = [PSCustomObject]@{} }
     $d | Add-Member -NotePropertyName http_port -NotePropertyValue $hp -Force
     $d | Add-Member -NotePropertyName tftp_port -NotePropertyValue 69 -Force
@@ -607,10 +644,31 @@ function Apply-Ports {
     $changed = @("HTTP 端口已更新为 $hp")
     if ($modeChanged) { $changed += "DHCP 模式已切换为 $sel" }
     $msg = $changed -join "，"
-    # 只修改配置，不自动启动服务（点"打开链接"手动启动）
-    if (Test-Service) { $lblState.Text = "$msg（服务运行中，重启后生效）" }
-    else { $lblState.Text = "$msg（点启动并打开）" }
-    $lblDot.ForeColor = $DIM
+    # 服务运行中且配置有变：自动重启使配置立即生效（与 Web 端"保存并重启"一致）；
+    # 服务未运行时只改配置，不自动启动（点"启动并打开"手动启动）
+    $running = Test-Service
+    if ($running -and ($portChanged -or $modeChanged)) {
+        $lblState.Text = "$msg，正在重启服务..."
+        $lblDot.ForeColor = $DIM
+        $lblState.Refresh()
+        Stop-Project
+        Start-Sleep -Milliseconds 500
+        $ok = Start-Service
+        if ($ok) {
+            Update-State
+            $lblState.Text = "$msg，服务已重启生效"
+            $lblDot.ForeColor = $GREEN
+        } else {
+            $lblState.Text = "$msg，服务重启失败：$($script:lastErr)"
+            $lblDot.ForeColor = $RED
+        }
+    } elseif ($running) {
+        $lblState.Text = "$msg（服务运行中，重启后生效）"
+        $lblDot.ForeColor = $DIM
+    } else {
+        $lblState.Text = "$msg（点启动并打开）"
+        $lblDot.ForeColor = $DIM
+    }
 }
 
 # 判断进程是否为本服务（main.py / http_server.py 后端 8081），本服务不列为占用者
@@ -779,6 +837,10 @@ $form.Add_Shown({
         }
         $script:nicBox.SelectedIndex = $idx
         $script:nicApplying = $false
+        # 关键修复：自动选中的网卡 IP 同步进配置，确保前后端按 UI 显示的网卡启动
+        # （config 里 server_ip 可能仍是旧值/他网段，不写回会导致服务用错 IP）
+        $selIp = $script:nicIpMap[$script:nicBox.SelectedItem]
+        if ($selIp -and $selIp -ne $cfg.ip) { Set-Nic $selIp }
     }
     Update-State
     if ($AutoStart) { $btnOpen.PerformClick() }

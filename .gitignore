@@ -1,0 +1,10 @@
+# 大文件：引导镜像不推送到 GitHub（661MB）
+boot/BOOT.WIM
+*.wim
+
+# 运行日志与缓存
+logs/
+__pycache__/
+*.pyc
+tools/*.err
+tools/*.log

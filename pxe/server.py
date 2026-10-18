@@ -3,6 +3,7 @@
 服务协调层：组装 DHCP / TFTP / HTTP 三个服务，提供统一状态、日志与引导文件生成。
 """
 import collections
+import json
 import os
 import queue
 import re
@@ -510,13 +511,22 @@ class ServerContext:
 
     def status(self):
         cfg = self.config
+        # DHCP 显示与磁盘 config.json 同源：launcher 直接写文件时，
+        # 服务进程内存可能滞后，实时读文件保证 WEB 与窗口启动器显示一致
+        try:
+            with open(cfg.path, "r", encoding="utf-8") as _f:
+                _disk = json.load(_f)
+            _de = bool(_disk.get("dhcp_enable", cfg.dhcp_enable))
+            _dm = _disk.get("dhcp_mode", cfg.dhcp_mode)
+        except Exception:
+            _de, _dm = cfg.dhcp_enable, cfg.dhcp_mode
         return {
             "server_ip": cfg.server_ip,
             "http_port": cfg.http_port,
             "tftp_port": cfg.tftp_port,
             "dhcp_port": cfg.dhcp_port,
-            "dhcp_enable": cfg.dhcp_enable,
-            "dhcp_mode": cfg.dhcp_mode,
+            "dhcp_enable": _de,
+            "dhcp_mode": _dm,
             "uptime": int(time.time() - self.start_time),
             "isos": len([e for e in self.registry.entries()]),
             "leases": self.dhcp.leases_snapshot(),

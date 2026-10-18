@@ -160,7 +160,7 @@ async function loadStatus() {
     uptimeBase = s.uptime; uptimeAt = Date.now(); uptimeFrozen = false;
     renderUptime();
     $("#st-server").textContent = s.server_ip;
-    $("#st-dhcp").textContent = s.dhcp_enable ? (s.dhcp_mode === "proxy" ? "代理" : "完整") : "关闭";
+    $("#st-dhcp").textContent = (!s.dhcp_enable || s.dhcp_mode === "off") ? "关闭" : (s.dhcp_mode === "proxy" ? "代理" : "完整");
     // 缓存客户端列表供"已上线总数"统计（每 30 秒刷新显示）
     lastClients = s.clients || [];
     renderOnlineCount();
