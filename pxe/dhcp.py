@@ -166,8 +166,10 @@ class DhcpPacket:
 
     @property
     def is_ipxe(self):
-        """iPXE 客户端（重 DHCP 阶段以 vendor class 'iPXE' 请求）。"""
-        return self.vendor_class.upper().startswith("IPXE")
+        """iPXE 客户端：iPXE 重 DHCP 时带 user class 'iPXE'（option 77）请求
+        （vendor class 仍为 PXEClient），或 vendor class 直接以 iPXE 开头。"""
+        uc = self.options.get(OPT_USER_CLASS) or b""
+        return (b"iPXE" in uc) or self.vendor_class.upper().startswith("IPXE")
 
     @property
     def is_pxe_family(self):
@@ -377,6 +379,13 @@ class DhcpServer:
         if mode == "proxy":
             if mtype in (DHCP_DISCOVER,) and req.is_pxe_family:
                 bootfile = self.config.bootfile_for_arch(req.client_arch or 0x00)
+                # iPXE 重 DHCP（user class 'iPXE'）：bootfile 指向 HTTP 脚本
+                # ipxe.cfg（iPXE 的 netboot 支持 http URL，下载后按脚本执行，
+                # 直引 BOOT.WIM 进 PE），避免 iPXE 再次下载 ipxe.pxe 递归；
+                # 同时保留 option175 作双保险。PXE ROM 首次 DISCOVER 无 iPXE
+                # 标记，正常获得 ipxe.pxe 引导进入 iPXE。
+                if req.is_ipxe:
+                    bootfile = ipxe_script
                 opts = {
                     # server id：让固件识别这是"代理 DHCP 引导建议"（EDK2 固件
                     # 对无 server id 的代理 OFFER 会忽略并继续重发 DISCOVER）
@@ -405,6 +414,10 @@ class DhcpServer:
             if ip is None:
                 return None
             bootfile = self.config.bootfile_for_arch(req.client_arch or 0x00)
+            # iPXE 重 DHCP：bootfile 指向 HTTP 脚本 ipxe.cfg（iPXE netboot
+            # 支持 http URL 按脚本执行），避免 iPXE 再次下载 ipxe.pxe 递归
+            if req.is_ipxe:
+                bootfile = ipxe_script
             opts = {
                 OPT_SERVER_ID: cfg.get("server_ip"),
                 OPT_LEASE_TIME: self.config.lease_time(),
@@ -444,6 +457,9 @@ class DhcpServer:
                         self._leases[req.mac]["state"] = "bound"
                         self._leases[req.mac]["ts"] = time.time()
                 bootfile = self.config.bootfile_for_arch(req.client_arch or 0x00)
+                # iPXE 重 DHCP：bootfile 指向 HTTP 脚本 ipxe.cfg，避免递归
+                if req.is_ipxe:
+                    bootfile = ipxe_script
                 opts = {
                     OPT_SERVER_ID: cfg.get("server_ip"),
                     OPT_LEASE_TIME: self.config.lease_time(),

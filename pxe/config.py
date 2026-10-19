@@ -236,7 +236,11 @@ class Config:
         arch_code: 0x00 BIOS / 0x06 EFI IA32 / 0x07 EFI x64 / 0x09 EFI ARM64
         """
         boot = {
-            0x00: "pxelinux.0",
+            # BIOS 走原生驱动版 ipxe.pxe（EMBED=dhcp+chain ${ipxe-script}，内置网卡驱动、
+            # 不依赖 PXE ROM 的 UNDI——undionly.kpxe 依赖 UNDI，在部分虚拟/物理固件上会
+            # UNDI API 失败）。启动即执行内嵌脚本：重新 dhcp 拿 proxy OFFER 的 option175 →
+            # chain ipxe.cfg 直引 BOOT.WIM，不显示任何 PXE 菜单（UEFI/Legacy 均直引 PE）
+            0x00: "ipxe.pxe",
             0x06: "grubia32.efi",
             # UEFI x64 使用 iPXE shim 签名版（VMware EFI 固件下 GRUB 的
             # loopback 随机读不可靠，iPXE shim 在 VMware 下稳定

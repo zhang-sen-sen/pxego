@@ -239,6 +239,17 @@ def gen_ipxe_script(config, entries):
     wins = [e for e in entries if e["conf"].get("os_type") in ("windows", "windows_pe")]
     lines = ["#!ipxe",
              f"set server {server}",
+             # 按客户端固件选择 Windows Boot Manager：BIOS→bootmgr，UEFI→bootmgfw.efi
+             # （platform 为 ipxe 内置变量：pcbios/efi/efia64/arm64）
+             "goto ${platform}",
+             ":pcbios",
+             "set wbm bootmgr",
+             "goto bootstart",
+             ":efi",
+             ":efia64",
+             ":arm64",
+             "set wbm bootmgfw.efi",
+             ":bootstart",
              ]
     # 无选择菜单：直接引导第一个条目（固定 PE 维护系统在前）
     if wins:
@@ -255,11 +266,21 @@ def gen_ipxe_script(config, entries):
             pe_sdi = conf.get("wim_sdi", "boot/boot.sdi")
             lines += [
                 f":w{i}",
-                f"kernel --timeout 30 {http_srv}/boot/wimboot || goto reboot",
-                f"initrd --name bootmgfw.efi --timeout 60 {http_srv}/{pe_efi} || goto reboot",
-                f"initrd --name BCD --timeout 60 {http_srv}/{pe_bcd} || goto reboot",
-                f"initrd --name boot.sdi --timeout 60 {http_srv}/{pe_sdi} || goto reboot",
-                f"initrd --name boot.wim --timeout 300 {http_srv}/{pe_wim} || goto reboot",
+                # imgfree：清空 iPXE image 列表，防止 ipxe.cfg 脚本自身（作为
+                # image 加载）被 wimboot 打包进 CPIO 导致 BIOS 下 "Bad CPIO magic"
+                # （UEFI 不受影响；不加 imgfree 时 BIOS 报 FATAL: could not extract
+                # initrd files）
+                "imgfree",
+                # linear：禁用 wimboot 默认的 paging（BIOS 下自动把数据重定位到
+                # 4GB 以上以容纳大 WIM）；VM/BIOS 实机 paging 重定位易失败导致
+                # "Bad CPIO magic / could not extract initrd files"。
+                f"kernel --timeout 30 {http_srv}/boot/wimboot linear || goto reboot",
+                # initrd 必须带"第二参数"（目标名）：iPXE 据此把文件正确
+                # 放入 initrd 内存盘；只写 --name 会导致 wimboot "Bad CPIO magic"
+                f"initrd --timeout 60 {http_srv}/boot/${{wbm}} ${{wbm}} || goto reboot",
+                f"initrd --timeout 60 {http_srv}/{pe_bcd} BCD || goto reboot",
+                f"initrd --timeout 60 {http_srv}/{pe_sdi} boot.sdi || goto reboot",
+                f"initrd --timeout 300 {http_srv}/{pe_wim} boot.wim || goto reboot",
                 "boot || goto reboot",
                 ":reboot",
                 "echo ==== PXE boot failed or timed out, reporting then rebooting ====",
@@ -289,11 +310,12 @@ def gen_ipxe_script(config, entries):
         # （VM 重新 PXE 引导重试，避免停在 9% 这类无进展状态）
         lines += [
             f":w{i}",
-            f"kernel --timeout 30 {http_srv}/boot/wimboot || goto reboot",
-            f"initrd --name bootmgfw.efi --timeout 60 {efi_url} || goto reboot",
-            f"initrd --name BCD --timeout 60 {bcd_url} || goto reboot",
-            f"initrd --name boot.sdi --timeout 60 {sdi_url} || goto reboot",
-            f"initrd --name boot.wim --timeout 180 {wim_url} || goto reboot",
+            "imgfree",
+            f"kernel --timeout 30 {http_srv}/boot/wimboot linear || goto reboot",
+            f"initrd --timeout 60 {efi_url} bootmgfw.efi || goto reboot",
+            f"initrd --timeout 60 {bcd_url} BCD || goto reboot",
+            f"initrd --timeout 60 {sdi_url} boot.sdi || goto reboot",
+            f"initrd --timeout 180 {wim_url} boot.wim || goto reboot",
             "boot || goto reboot",
             ":reboot",
             "echo ==== PXE boot failed or timed out, rebooting ====",
