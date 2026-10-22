@@ -15,24 +15,63 @@ $cfg = @{ ip = "192.168.1.10"; port = 8080; tftp = 69; dhcp = 67; dhcpMode = "dh
 $cfgPath = Join-Path $Base "config.json"
 if (Test-Path $cfgPath) {
     try {
-        $d = Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($d.server_ip) { $cfg.ip = [string]$d.server_ip }
-        if ($d.http_port) { $cfg.port = [int]$d.http_port }
-        if ($d.tftp_port) { $cfg.tftp = [int]$d.tftp_port }
-        if ($d.dhcp_port) { $cfg.dhcp = [int]$d.dhcp_port }
-        if ($d.dhcp_mode) { $cfg.dhcpMode = [string]$d.dhcp_mode }
+        $d = Read-JsonFile $cfgPath
+        if ($d) {
+            if ($d["server_ip"]) { $cfg.ip = [string]$d["server_ip"] }
+            if ($d["http_port"]) { $cfg.port = [int]$d["http_port"] }
+            if ($d["tftp_port"]) { $cfg.tftp = [int]$d["tftp_port"] }
+            if ($d["dhcp_port"]) { $cfg.dhcp = [int]$d["dhcp_port"] }
+            if ($d["dhcp_mode"]) { $cfg.dhcpMode = [string]$d["dhcp_mode"] }
+        }
     } catch {}
 }
 $ManageUrl = "http://$($cfg.ip):$($cfg.port)/"
 
+# ---------------- PS2/Win7 兼容工具（JSON 读写 + 端口枚举） ----------------
+# Win7 默认 PowerShell 2.0：无 Get-CimInstance / ConvertFrom-Json / Get-NetTCPConnection
+# 统一用 .NET + netstat 实现，保证 Win7 可直接运行
+try { Add-Type -AssemblyName System.Web.Extensions } catch { }
+function Read-JsonFile($path) {
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    try {
+        $s = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+        return $s.DeserializeObject([System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8))
+    } catch { return $null }
+}
+function Write-JsonFile($path, $obj) {
+    try {
+        $s = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+        $json = $s.Serialize($obj)
+        [System.IO.File]::WriteAllText($path, $json, (New-Object System.Text.UTF8Encoding $false))
+    } catch { }
+}
+function Get-ListenPids($proto, $port) {
+    # netstat -ano 解析监听进程（TCP 需 LISTENING 状态，UDP 按本地端口匹配）
+    $pids = @()
+    foreach ($line in (netstat -ano)) {
+        if ($proto -eq "TCP") {
+            if ($line -match "LISTENING" -and $line -match ":$port\s+") {
+                $parts = @($line -split "\s+") | Where-Object { $_ -match "^\d+$" }
+                if ($parts.Count -gt 0) { $pids += [int]$parts[-1] }
+            }
+        } else {
+            if ($line -match "^\s*UDP\s+[^\s]+:$port\s+") {
+                $parts = @($line -split "\s+") | Where-Object { $_ -match "^\d+$" }
+                if ($parts.Count -gt 0) { $pids += [int]$parts[-1] }
+            }
+        }
+    }
+    return @($pids | Select-Object -Unique)
+}
+
 # ---------------- 网卡枚举（名称 + 当前 IPv4 + MAC） ----------------
 function Get-NicList {
     $list = @()
-    Get-CimInstance Win32_NetworkAdapterConfiguration -ErrorAction SilentlyContinue |
+    Get-WmiObject Win32_NetworkAdapterConfiguration -ErrorAction SilentlyContinue |
         Where-Object { $_.IPEnabled } | ForEach-Object {
             $v4 = @($_.IPAddress) | Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}$' } | Select-Object -First 1
             if ($v4 -and $v4 -notlike "169.254*") {
-                $list += [PSCustomObject]@{ Name = $_.Description; IP = $v4; MAC = $_.MACAddress }
+                $list += New-Object PSObject -Property @{ Name = $_.Description; IP = $v4; MAC = $_.MACAddress }
             }
         }
     return $list
@@ -343,10 +382,10 @@ $script:dhcpModeBox.Add_SelectedIndexChanged({
     if (-not $sel -or -not $script:dhcpModeMap.ContainsKey($sel)) { return }
     $mode = $script:dhcpModeMap[$sel]
     if ($mode -eq $cfg.dhcpMode) { return }
-    try { $d = Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $d = [PSCustomObject]@{} }
-    $d | Add-Member -NotePropertyName dhcp_mode -NotePropertyValue $mode -Force
-    $json = $d | ConvertTo-Json -Depth 5
-    [System.IO.File]::WriteAllText($cfgPath, $json, (New-Object System.Text.UTF8Encoding $false))
+    $d = Read-JsonFile $cfgPath
+    if (-not $d) { $d = @{} }
+    $d["dhcp_mode"] = $mode
+    Write-JsonFile $cfgPath $d
     $cfg.dhcpMode = $mode
     $msg = "DHCP 模式已切换为 $sel"
     $running = Test-Service
@@ -492,7 +531,7 @@ function Update-State {
 function Resolve-PythonExe {
     $embedded = Join-Path $Base "runtime\python\python.exe"
     if (Test-Path $embedded) { return $embedded }
-    $g = Get-Command python -All -ErrorAction SilentlyContinue |
+    $g = Get-Command python -ErrorAction SilentlyContinue |
          Where-Object { $_.CommandType -eq "Application" -and $_.Source -and
                         $_.Source -notlike "*WindowsApps*" } |
          Select-Object -First 1
@@ -504,7 +543,7 @@ $script:pythonExe = Resolve-PythonExe
 function Start-Service {
     if (Test-Service) {
         # 主服务已运行：若 8081 后端未监听则补启动（供 PE 内 Z 盘映射）
-        $r8081 = @(Get-NetTCPConnection -LocalPort 8081 -State Listen -ErrorAction SilentlyContinue).Count
+        $r8081 = @(Get-ListenPids "TCP" 8081).Count
         if ($r8081 -eq 0 -and $script:pythonExe) {
             $logDir2 = Join-Path $Base "tools"
             New-Item -ItemType Directory -Force $logDir2 | Out-Null
@@ -547,7 +586,7 @@ function Start-Service {
         if (Test-Service) { return $true }
         if ($p.HasExited) {
             $err = ""
-            if (Test-Path $errLog) { $err = (Get-Content $errLog -Raw -Encoding UTF8 -ErrorAction SilentlyContinue).Trim() }
+            if (Test-Path $errLog) { $err = [System.IO.File]::ReadAllText($errLog, [System.Text.Encoding]::UTF8).Trim() }
             $script:lastErr = "服务进程退出(code=$($p.ExitCode))：$err"
             return $false
         }
@@ -571,11 +610,7 @@ function Stop-Service {
 function Stop-Project {
     $pids = @()
     foreach ($c in @(@{P = "UDP"; Port = 67}, @{P = "UDP"; Port = 69}, @{P = "TCP"; Port = $cfg.port}, @{P = "TCP"; Port = 8081})) {
-        if ($c.P -eq "UDP") {
-            $pids += @(Get-NetUDPEndpoint -LocalPort $c.Port -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
-        } else {
-            $pids += @(Get-NetTCPConnection -LocalPort $c.Port -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
-        }
+        $pids += @(Get-ListenPids $c.P $c.Port)
     }
     $killed = 0
     foreach ($id in ($pids | Select-Object -Unique)) {
@@ -586,14 +621,13 @@ function Stop-Project {
     $script:svcPid = $null
     $script:rclonePid = $null
     Update-State
-    $lblState.Text = if ($killed -gt 0) { "服务已停止" } else { "服务未运行" }
+    if ($killed -gt 0) { $lblState.Text = "服务已停止" } else { $lblState.Text = "服务未运行" }
     $lblDot.ForeColor = $RED
 }
 
 # 停止所有占用 HTTP 端口（默认 8080）的监听进程
 function Stop-PortUsers {
-    $pids = Get-NetTCPConnection -LocalPort $cfg.port -State Listen -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty OwningProcess -Unique
+    $pids = Get-ListenPids "TCP" $cfg.port
     foreach ($id in $pids) {
         try { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue } catch {}
     }
@@ -608,7 +642,7 @@ function Add-IpInt($ipStr, $n) {
     $v = [System.BitConverter]::ToUInt32($b, 0) + $n
     $b2 = [System.BitConverter]::GetBytes([uint32]$v)
     [Array]::Reverse($b2)
-    return [System.Net.IPAddress]::new($b2).ToString()
+    return (New-Object System.Net.IPAddress($b2)).ToString()
 }
 
 function Get-SubnetPool($ip, $maskStr) {
@@ -616,7 +650,7 @@ function Get-SubnetPool($ip, $maskStr) {
     $mkb = [System.Net.IPAddress]::Parse($maskStr).GetAddressBytes()
     $netb = New-Object byte[] 4
     for ($i = 0; $i -lt 4; $i++) { $netb[$i] = $ipb[$i] -band $mkb[$i] }
-    $netIp = [System.Net.IPAddress]::new($netb).ToString()
+    $netIp = (New-Object System.Net.IPAddress($netb)).ToString()
     $prefix = 0
     foreach ($byte in $mkb) { for ($i = 7; $i -ge 0; $i--) { if (($byte -shr $i) -band 1) { $prefix++ } } }
     $hosts = [math]::Pow(2, 32 - $prefix) - 2
@@ -628,17 +662,16 @@ function Get-SubnetPool($ip, $maskStr) {
 
 function Set-Nic($ip) {
     if (-not $ip -or $ip -eq $cfg.ip) { return }
-    try {
-        $d = Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    } catch { $d = [PSCustomObject]@{} }
-    $d | Add-Member -NotePropertyName server_ip -NotePropertyValue $ip -Force
+    $d = Read-JsonFile $cfgPath
+    if (-not $d) { $d = @{} }
+    $d["server_ip"] = $ip
     # 地址池同步到新网卡子网
-    $maskStr = if ($d.netmask) { [string]$d.netmask } else { "255.255.255.0" }
+    $maskStr = "255.255.255.0"
+    if ($d["netmask"]) { $maskStr = [string]$d["netmask"] }
     $pool = Get-SubnetPool $ip $maskStr
-    $d | Add-Member -NotePropertyName ip_pool -NotePropertyValue ([PSCustomObject]@{ start = $pool[0]; end = $pool[1] }) -Force
-    $d | Add-Member -NotePropertyName gateway -NotePropertyValue "" -Force
-    $json = $d | ConvertTo-Json -Depth 5
-    [System.IO.File]::WriteAllText($cfgPath, $json, (New-Object System.Text.UTF8Encoding $false))
+    $d["ip_pool"] = @{ start = $pool[0]; end = $pool[1] }
+    $d["gateway"] = ""
+    Write-JsonFile $cfgPath $d
     $cfg.ip = $ip
     $script:ManageUrl = "http://$($cfg.ip):$($cfg.port)/"
     $lblUrl.Text = $script:ManageUrl
@@ -655,16 +688,17 @@ function Apply-Ports {
     if ($hp -lt 1 -or $hp -gt 65535) { $lblState.Text = "HTTP 端口须在 1-65535 之间"; $lblDot.ForeColor = $RED; return }
     # DHCP 模式随"应用"一并写入（与下拉框当前选择同步）
     $sel = $script:dhcpModeBox.SelectedItem
-    $mode = if ($sel -and $script:dhcpModeMap.ContainsKey($sel)) { $script:dhcpModeMap[$sel] } else { $cfg.dhcpMode }
+    $mode = $cfg.dhcpMode
+    if ($sel -and $script:dhcpModeMap.ContainsKey($sel)) { $mode = $script:dhcpModeMap[$sel] }
     $modeChanged = ($mode -ne $cfg.dhcpMode)
     $portChanged = ($hp -ne $cfg.port)
-    try { $d = Get-Content $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $d = [PSCustomObject]@{} }
-    $d | Add-Member -NotePropertyName http_port -NotePropertyValue $hp -Force
-    $d | Add-Member -NotePropertyName tftp_port -NotePropertyValue 69 -Force
-    $d | Add-Member -NotePropertyName dhcp_port -NotePropertyValue 67 -Force
-    if ($modeChanged) { $d | Add-Member -NotePropertyName dhcp_mode -NotePropertyValue $mode -Force }
-    $json = $d | ConvertTo-Json -Depth 5
-    [System.IO.File]::WriteAllText($cfgPath, $json, (New-Object System.Text.UTF8Encoding $false))
+    $d = Read-JsonFile $cfgPath
+    if (-not $d) { $d = @{} }
+    $d["http_port"] = $hp
+    $d["tftp_port"] = 69
+    $d["dhcp_port"] = 67
+    if ($modeChanged) { $d["dhcp_mode"] = $mode }
+    Write-JsonFile $cfgPath $d
     $cfg.port = $hp; $cfg.tftp = 69; $cfg.dhcp = 67
     if ($modeChanged) { $cfg.dhcpMode = $mode }
     $script:ManageUrl = "http://$($cfg.ip):$($cfg.port)/"
@@ -704,7 +738,7 @@ function Apply-Ports {
 function Test-SvcProcess($procId) {
     if ($procId -eq $script:svcPid) { return $true }
     try {
-        $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$procId" -ErrorAction SilentlyContinue).CommandLine
+        $cmd = (Get-WmiObject Win32_Process -Filter "ProcessId=$procId" -ErrorAction SilentlyContinue).CommandLine
         if ($cmd -and ($cmd -match "main\.py" -or $cmd -match "http_server\.py")) { return $true }
     } catch {}
     return $false
@@ -721,14 +755,7 @@ function Scan-Ports {
         @{ Proto = "TCP"; Port = 8081; Name = "RCLONE"; AlwaysKill = $true }
     )
     foreach ($c in $checks) {
-        $pids = @()
-        if ($c.Proto -eq "UDP") {
-            $pids = @(Get-NetUDPEndpoint -LocalPort $c.Port -ErrorAction SilentlyContinue |
-                      Select-Object -ExpandProperty OwningProcess -Unique)
-        } else {
-            $pids = @(Get-NetTCPConnection -LocalPort $c.Port -State Listen -ErrorAction SilentlyContinue |
-                      Select-Object -ExpandProperty OwningProcess -Unique)
-        }
+        $pids = @(Get-ListenPids $c.Proto $c.Port)
         if ($pids.Count -eq 0) {
             $lines += "$($c.Name)（$($c.Proto) $($c.Port)）：空闲"
         } else {
@@ -738,7 +765,8 @@ function Scan-Ports {
                     $desc += "$procId（本服务）"
                 } else {
                     $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
-                    $nm = if ($proc) { $proc.ProcessName } else { "未知" }
+                    $nm = "未知"
+                    if ($proc) { $nm = $proc.ProcessName }
                     $desc += "$procId（$nm）"
                     $script:occupiers += $procId
                 }
@@ -780,7 +808,7 @@ if ($SelfTest) {
     $started = Start-Service
     Start-Sleep -Milliseconds 500
     $after = Test-Service
-    $listeners = @(Get-NetTCPConnection -LocalPort $cfg.port -State Listen -ErrorAction SilentlyContinue).Count
+    $listeners = @(Get-ListenPids "TCP" $cfg.port).Count
     $stopped = Stop-PortUsers
     Stop-Service
     Write-Output "selftest: py=$script:pythonExe before=$before started=$started after_start=$after listeners=$listeners stopped=$stopped lastErr=$script:lastErr url=$ManageUrl"
