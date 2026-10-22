@@ -134,6 +134,11 @@ def default_config():
         "web_dir": "web",
         "password": "",
         "log_lines": 200,
+        # VNC 远程维护：PE 客户机启动后自动运行 VNC 服务端（免密 None 认证，
+        # 纯内网使用不考虑安全；TightVNC 端 UseVncAuthentication=0 无密码直连）。
+        # 若需要恢复密码认证，设置 1-8 位密码并同步修改 PE 端注册表配置
+        "vnc_password": "",
+        "vnc_port": 5900,
     }
 
 
@@ -251,6 +256,14 @@ class Config:
 
     def bootfile_default(self):
         return "sb-uefi-snponly-shim.efi"
+
+    @property
+    def vnc_password(self):
+        return str(self.data.get("vnc_password", "") or "")
+
+    @property
+    def vnc_port(self):
+        return int(self.data.get("vnc_port", 5900) or 5900)
 
 
 if __name__ == "__main__":

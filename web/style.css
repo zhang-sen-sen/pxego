@@ -42,6 +42,7 @@ main { display: grid; grid-template-columns: 1fr; gap: 20px; padding: 22px 28px;
 .section-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
 .section-head h2 { font-size: 18px; }
 .hint { color: var(--muted); font-size: 12px; }
+.hint-inline { display: inline-block; margin-left: 10px; font-weight: normal; font-size: 11px; vertical-align: middle; }
 .count { color: var(--accent); }
 .iso-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
 .iso-card {
@@ -77,9 +78,15 @@ main { display: grid; grid-template-columns: 1fr; gap: 20px; padding: 22px 28px;
 .panel h3 { font-size: 14px; margin-bottom: 8px; }
 .online-count { font-size: 12px; font-weight: normal; color: #4caf50; margin-left: 6px; }
 .client-list { font-size: 12px; }
-.client-item { padding: 4px 0; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.client-item { padding: 6px 0; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.client-item .client-main { display: flex; flex-direction: row; flex-wrap: wrap; gap: 4px 12px; align-items: center; min-width: 0; }
 .client-item .mac { font-family: Consolas, monospace; }
 .client-item .up-time { color: var(--muted); font-family: Consolas, monospace; font-size: 11px; }
+.vnc-btn {
+  background: var(--green); border-color: var(--green); color: #06240f;
+  font-size: 12px; padding: 5px 12px; flex-shrink: 0; font-weight: 600;
+}
+.vnc-btn:hover { border-color: #7ee2a8; background: #2dd46b; }
 .empty-sm { color: var(--muted); font-size: 12px; }
 .log-box { font-size: 11px; color: var(--muted); white-space: pre-wrap; font-family: Consolas, monospace; }
 .modal { position: fixed; inset: 0; background: rgba(5,8,16,.72); display: flex; align-items: center; justify-content: center; z-index: 50; }

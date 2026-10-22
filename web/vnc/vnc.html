@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VNC 远程控制</title>
+<style>
+:root {
+  --bg: #0f1420; --panel: #171e2e; --panel2: #1e2739;
+  --border: #2a3550; --text: #dbe3f2; --muted: #8a96b0;
+  --accent: #3b82f6; --green: #22c55e; --yellow: #eab308; --red: #ef4444;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  background: var(--bg); color: var(--text);
+  display: flex; flex-direction: column;
+}
+header {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 10px 18px;
+  background: linear-gradient(180deg, #1a2340 0%, #141b2c 100%);
+  border-bottom: 1px solid var(--border);
+}
+header h1 { font-size: 15px; letter-spacing: 1px; }
+header .sub { color: var(--muted); font-size: 12px; font-family: Consolas, monospace; }
+.spacer { flex: 1; }
+#status {
+  font-size: 12px; padding: 3px 12px; border-radius: 20px;
+  background: var(--panel2); border: 1px solid var(--border); color: var(--muted);
+}
+#status.connecting { color: var(--yellow); border-color: var(--yellow); }
+#status.connected { color: var(--green); border-color: var(--green); }
+#status.failed, #status.disconnected { color: var(--red); border-color: var(--red); }
+button {
+  background: var(--panel2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 12px; cursor: pointer; font-size: 12px;
+}
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); }
+main { flex: 1; padding: 12px 18px; position: relative; }
+#screen { width: 100%; height: 100%; }
+#screen > div { width: 100% !important; height: 100% !important; }
+#screen canvas { background: #000; }
+#hint {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 13px; text-align: center; padding: 0 20px; z-index: 0;
+}
+#hint.hidden { display: none; }
+#hint code { background: var(--panel2); padding: 1px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>VNC 远程控制</h1>
+  <span class="sub" id="target-label">-</span>
+  <span class="spacer"></span>
+  <span id="status">初始化</span>
+  <button id="btn-scale" title="画面自适应缩放">缩放</button>
+  <button id="btn-fs" title="全屏显示">全屏</button>
+  <button id="btn-conn" class="primary">连接</button>
+  <button id="btn-close">关闭</button>
+</header>
+<main>
+  <div id="hint">正在连接远程桌面…<br><br>如果长时间无响应，请确认客户机 PE 已进入桌面且 VNC 已启动。<br>连接地址：<code id="hint-target"></code></div>
+  <div id="screen"></div>
+</main>
+<script src="/vnc/novnc-bundle.js"></script>
+<script>
+"use strict";
+(function () {
+  const params = new URLSearchParams(location.search);
+  const host = (params.get("host") || "").trim();
+  const port = (params.get("port") || "5900").trim();
+  const password = (params.get("password") || "").trim();
+  const label = host ? host + ":" + port : "(未指定目标)";
+  document.getElementById("target-label").textContent = label;
+  document.getElementById("hint-target").textContent = label;
+
+  const statusEl = document.getElementById("status");
+  const hintEl = document.getElementById("hint");
+  const screenEl = document.getElementById("screen");
+  let rfb = null;
+  let scale = true;
+
+  function setStatus(cls, text) {
+    statusEl.className = cls;
+    statusEl.textContent = text;
+  }
+
+  function buildUrl() {
+    const proto = location.protocol === "https:" ? "wss://" : "ws://";
+    return proto + location.host + "/vnc/ws?host=" +
+      encodeURIComponent(host) + "&port=" + encodeURIComponent(port);
+  }
+
+  function connect() {
+    if (rfb) { try { rfb.disconnect(); } catch (e) {} rfb = null; }
+    if (!host) {
+      setStatus("failed", "缺少目标地址");
+      hintEl.classList.remove("hidden");
+      return;
+    }
+    setStatus("connecting", "连接中…");
+    hintEl.classList.remove("hidden");
+    hintEl.innerHTML = "正在连接远程桌面…<br><br>连接地址：<code>" + label + "</code>";
+    try {
+      rfb = new window.RFB(screenEl, buildUrl(), {
+        credentials: password ? { password: password } : undefined,
+        wsProtocols: ["binary"],
+        shared: true,
+        scaleViewport: true,
+        clipViewport: true,
+        background: "#000000",
+      });
+      rfb.showDotCursor = true;
+    } catch (e) {
+      setStatus("failed", "初始化失败: " + e.message);
+      return;
+    }
+    rfb.addEventListener("connect", function () {
+      setStatus("connected", "已连接");
+      hintEl.classList.add("hidden");
+    });
+    rfb.addEventListener("disconnect", function (e) {
+      const reason = (e && e.detail && e.detail.clean) ? "已断开" : "连接中断";
+      setStatus("disconnected", reason);
+      hintEl.classList.remove("hidden");
+      hintEl.innerHTML = reason + "（目标 " + label + "）<br><br><button id='hint-reconnect'>重新连接</button>";
+      const b = document.getElementById("hint-reconnect");
+      if (b) b.onclick = connect;
+      rfb = null;
+    });
+    rfb.addEventListener("credentialsrequired", function () {
+      rfb.sendCredentials({ password: password });
+    });
+    rfb.addEventListener("securityfailure", function (e) {
+      const d = e.detail || {};
+      setStatus("failed", "认证失败: " + (d.reason || d.message || "密码错误"));
+      hintEl.classList.remove("hidden");
+      hintEl.innerHTML = "认证失败：请检查服务器配置中的 VNC 密码。<br><br>连接地址：<code>" + label + "</code>";
+    });
+    rfb.addEventListener("desktopname", function (e) {
+      if (e.detail && e.detail.name) document.title = e.detail.name + " - VNC 远程控制";
+    });
+    rfb.addEventListener("bell", function () {
+      try { new AudioContext().resume(); } catch (e) {}
+    });
+  }
+
+  function disconnect() {
+    if (rfb) { try { rfb.disconnect(); } catch (e) {} rfb = null; }
+    setStatus("disconnected", "已断开");
+  }
+
+  document.getElementById("btn-conn").onclick = function () {
+    this.textContent = rfb ? "连接" : "连接";
+    connect();
+  };
+  document.getElementById("btn-close").onclick = function () { window.close(); };
+  document.getElementById("btn-scale").onclick = function () {
+    scale = !scale;
+    if (rfb) {
+      rfb.scaleViewport = scale;
+      rfb.clipViewport = !scale;
+    }
+    this.textContent = scale ? "缩放" : "原尺寸";
+  };
+  document.getElementById("btn-fs").onclick = function () {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen().catch(function () {});
+  };
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && document.fullscreenElement) document.exitFullscreen();
+  });
+
+  // 页面就绪后自动连接
+  connect();
+})();
+</script>
+</body>
+</html>

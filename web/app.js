@@ -56,28 +56,37 @@ function initLogStream() {
         const parts = data.split("\u001e");           // ["", "R", key, line]
         const key = parts[2];
         const line = parts[3];
-        // key 格式 "客户端IP:文件名"，多客户端同文件下载各自独立
-        const sep = key.lastIndexOf(":");
-        const ip = sep >= 0 ? key.slice(0, sep) : "";
-        const name = sep >= 0 ? key.slice(sep + 1) : key;
         const lines = lb.textContent.split("\n");
         let idx = -1;
-        for (let i = lines.length - 1; i >= 0; i--) {
-          if (lines[i].indexOf("下载 " + name) !== -1
-              && (!ip || lines[i].indexOf("[" + ip + "]") !== -1)) { idx = i; break; }
+        if (key.startsWith("vnc:")) {
+          // VNC 会话日志：key "vnc:<host>:<port>"，按 "远程控制 host:port"
+          // 匹配最后一行替换，只保留 1 条最新的 VNC 日志
+          const hostport = key.slice(4);
+          for (let i = lines.length - 1; i >= 0; i--) {
+            if (lines[i].indexOf("远程控制 " + hostport) !== -1) { idx = i; break; }
+          }
+        } else {
+          // 下载进度：key 格式 "客户端IP:文件名"，多客户端同文件下载各自独立
+          const sep = key.lastIndexOf(":");
+          const ip = sep >= 0 ? key.slice(0, sep) : "";
+          const name = sep >= 0 ? key.slice(sep + 1) : key;
+          for (let i = lines.length - 1; i >= 0; i--) {
+            if (lines[i].indexOf("下载 " + name) !== -1
+                && (!ip || lines[i].indexOf("[" + ip + "]") !== -1)) { idx = i; break; }
+          }
         }
         if (idx >= 0) lines[idx] = line; else lines.push(line);
         lb.textContent = sortLogLines(lines).join("\n");
         lb.scrollTop = lb.scrollHeight;
       } else if (data.startsWith("\u001eP\u001e")) {
         // 客户端上线：清掉该客户端已显示的过程日志，只保留上线/下线状态行
-        const parts = data.split("\u001e");           // ["", "P", ip, macColon, macPlain]
-        const ip = parts[2];
+        const parts = data.split("\u001e");  // ["", "P", "ip1,ip2,...", macColon, macPlain]
+        const ips = (parts[2] || "").split(",").filter(Boolean);
         const macColon = parts[3];
         const macPlain = parts[4];
         const lines = lb.textContent.split("\n");
         const kept = lines.filter((l) =>
-          !isClientLog(l, ip, macColon, macPlain)
+          !isClientLog(l, ips, macColon, macPlain)
           || l.indexOf("已上线") !== -1 || l.indexOf("已下线") !== -1);
         lb.textContent = sortLogLines(kept).join("\n");
         lb.scrollTop = lb.scrollHeight;
@@ -109,14 +118,15 @@ function sortLogLines(lines) {
   return lines.sort((a, b) => tsOf(a) - tsOf(b));
 }
 
-function isClientLog(line, ip, macColon, macPlain) {
-  // 与服务端 _line_is_client 同规则：MAC 或 IP 关联判断日志行属于某客户端
+function isClientLog(line, ips, macColon, macPlain) {
+  // 与服务端 _line_is_client 同规则：MAC 或任一历史 IP 关联判断日志行属于某客户端
   if (!line) return false;
   const low = line.toLowerCase();
   if (macColon && (low.indexOf("客户端mac=" + macColon) !== -1
                    || low.indexOf("mac=" + macColon) !== -1)) return true;
   if (macPlain && low.replace(/:/g, "").indexOf(macPlain) !== -1) return true;
-  if (ip) {
+  for (const ip of ips || []) {
+    if (!ip) continue;
     if (low.indexOf("[" + ip + "]") !== -1) return true;
     if (low.indexOf("来自 " + ip + ":") !== -1 || low.indexOf("至 " + ip + ":") !== -1
         || low.indexOf("来自 " + ip + " ") !== -1 || low.indexOf("至 " + ip + " ") !== -1) return true;
@@ -180,9 +190,15 @@ async function loadStatus() {
         else if (c.state === "已下线") status = `已下线${no}号`;
         else if (c.state) status = c.state + (c.state.startsWith("正在") ? "…" : "");
         else status = "正在获取引导配置…";
-        return `<div class="client-item"><span class="mac">${c.mac}</span>
-          <span class="up-time">${c.time || "-"}</span>
-          <span>${c.ip || "-"} ${arch} ${status}</span></div>`;
+        const vnc = (c.vnc && c.vnc.state === "online" && c.ip)
+          ? `<button class="vnc-btn" title="远程控制 PE 桌面" data-vnc-host="${escapeHtml(c.ip)}" data-vnc-port="${Number(c.vnc.port) || 5900}">远程控制</button>`
+          : "";
+        const archSpan = arch ? `<span>${arch}</span>` : "";
+        return `<div class="client-item">
+          <div class="client-main"><span class="ip">${c.ip || "-"}</span>
+            ${archSpan}<span>${status}</span>
+            <span class="mac">${c.mac}</span>
+            <span class="up-time">${c.time || "-"}</span></div>${vnc}</div>`;
       }).join("");
     } else {
       cl.innerHTML = '<p class="empty-sm">暂无记录</p>';
@@ -228,6 +244,7 @@ function fillConfigForm() {
   const mf = cfg.mac_filter || {};
   $("#cfg-mac-mode").value = mf.mode || "off";
   $("#cfg-mac-list").value = (mf.list || []).join(", ");
+  $("#cfg-vnc-pwd").value = cfg.vnc_password || "";
 }
 
 async function loadConfigForm() {
@@ -263,6 +280,7 @@ function bindEvents() {
         mode: $("#cfg-mac-mode").value,
         list: $("#cfg-mac-list").value.split(",").map((s) => s.trim()).filter(Boolean),
       },
+      vnc_password: $("#cfg-vnc-pwd").value.trim(),
     };
     try {
       await api("/api/config", { method: "PATCH", body: JSON.stringify(patch) });
@@ -275,6 +293,15 @@ function bindEvents() {
   $("#cfg-cancel").onclick = () => closeModal("modal-config");
   $("#btn-bootfiles").onclick = async () => { await loadBootFiles(); openModal("modal-bootfiles"); };
   $("#bf-close").onclick = () => closeModal("modal-bootfiles");
+  // 客户端列表：点击「远程控制」在新标签页打开 noVNC
+  $("#client-list").addEventListener("click", (e) => {
+    const btn = e.target.closest(".vnc-btn");
+    if (!btn) return;
+    const host = btn.dataset.vncHost;
+    const port = btn.dataset.vncPort;
+    const pwd = (window.__cfg && window.__cfg.vnc_password) || "";
+    window.open(`/vnc/vnc.html?host=${encodeURIComponent(host)}&port=${port}&password=${encodeURIComponent(pwd)}`, "_blank");
+  });
   document.querySelectorAll(".modal").forEach((m) => {
     m.addEventListener("click", (e) => { if (e.target === m) m.classList.add("hidden"); });
   });
@@ -282,6 +309,7 @@ function bindEvents() {
 
 async function init() {
   bindEvents();
+  try { window.__cfg = await api("/api/config"); } catch (e) {} // 缓存配置（VNC 密码等）
   await loadStatus();
   initLogStream();   // 实时日志逐条推送（断开自动重连，回退轮询）
   setInterval(() => { loadStatus(); }, 5000);

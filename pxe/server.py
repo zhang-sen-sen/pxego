@@ -183,7 +183,7 @@ class ServerContext:
                   "time": time.strftime("%H:%M:%S"), "arch": info.get("arch"),
                   "hostname": info.get("hostname"),
                   "state": "正在获取引导配置", "state_ts": now,
-                  "seq": self._seq_next}
+                  "seq": self._seq_next, "ips": set()}
             self._seq_next += 1
             self._client_state[key] = st
         else:
@@ -197,6 +197,7 @@ class ServerContext:
                 st["state_ts"] = now
         if info.get("ip"):
             self._ip_mac[str(info["ip"])] = key
+            st.setdefault("ips", set()).add(str(info["ip"]))
         self._client_events.appendleft({"time": time.strftime("%H:%M:%S"),
                                         "mac": self._fmt_mac(key), **info})
 
@@ -241,6 +242,7 @@ class ServerContext:
         if ip:
             st["ip"] = str(ip)
             self._ip_mac[str(ip)] = key
+            st.setdefault("ips", set()).add(str(ip))
         if st:
             st["state"] = "已上线"
             st["state_ts"] = time.time()
@@ -253,20 +255,26 @@ class ServerContext:
             self._notify_client_purged(key)
 
     def _notify_client_purged(self, key):
-        """向前端推送清理事件：\\x1eP\\x1e<ip>\\x1e<macColon>\\x1e<macPlain>。
+        """向前端推送清理事件：\\x1eP\\x1e<ip1,ip2,...>\\x1e<macColon>\\x1e<macPlain>。
 
         前端收到后删除该客户端的全部过程日志行，只保留上线/下线状态行。
+        ip 以逗号分隔携带该客户端用过的全部历史 IP（DHCP 分配可能变化，
+        只传最终 IP 会漏掉旧 IP 的引导日志）。
         """
         st = self._client_state.get(key)
         if not st:
             return
         ip = str(st.get("ip") or "")
+        ips = list(st.get("ips") or [])
+        if ip and ip not in ips:
+            ips.append(ip)
+        ip_str = ",".join(ips)
         mac_colon = (self._fmt_mac(key) or "").lower()
         mac_plain = (key or "").lower()
         with self._log_lock:
             for q in list(self._log_waiters):
                 try:
-                    q.put_nowait("\x1eP\x1e" + ip + "\x1e" + mac_colon
+                    q.put_nowait("\x1eP\x1e" + ip_str + "\x1e" + mac_colon
                                  + "\x1e" + mac_plain)
                 except queue.Full:
                     pass
@@ -276,17 +284,21 @@ class ServerContext:
 
         只保留上线/下线状态行（"已上线00X号"/"已下线00X号"），
         过程日志（DHCP/TFTP/下载/进度等）不再显示。
+        按 MAC + 全部历史 IP 匹配，避免客户端换 IP 后旧引导日志残留。
         """
         st = self._client_state.get(key)
         if not st:
             return
         ip = str(st.get("ip") or "")
+        ips = list(st.get("ips") or [])
+        if ip and ip not in ips:
+            ips.append(ip)
         mac_colon = (self._fmt_mac(key) or "").lower()
         mac_plain = (key or "").lower()
         keep = []
         with self._log_lock:
             for line in self._log_buf:
-                if self._line_is_client(line, ip, mac_colon, mac_plain):
+                if self._line_is_client(line, ips, mac_colon, mac_plain):
                     if "已上线" in line or "已下线" in line:
                         keep.append(line)
                 else:
@@ -295,12 +307,12 @@ class ServerContext:
             self._log_buf.extend(keep)
         # 同时清掉该客户端的进度日志（合并显示时不再带回来）
         for k in list(self._latest_progress):
-            if self._line_is_client(self._latest_progress[k], ip,
+            if self._line_is_client(self._latest_progress[k], ips,
                                     mac_colon, mac_plain):
                 del self._latest_progress[k]
 
-    def _line_is_client(self, line, ip, mac_colon, mac_plain):
-        """判断日志行是否属于指定客户端（MAC 或 IP 关联）。"""
+    def _line_is_client(self, line, ips, mac_colon, mac_plain):
+        """判断日志行是否属于指定客户端（MAC 或任意历史 IP 关联）。"""
         if not line:
             return False
         low = line.lower()
@@ -309,7 +321,9 @@ class ServerContext:
             return True
         if mac_plain and mac_plain in low.replace(":", ""):
             return True
-        if ip:
+        for ip in (ips or []):
+            if not ip:
+                continue
             # 日志行格式为 [时间] [IP] ...，用包含匹配
             if "[" + ip + "]" in low:
                 return True
@@ -341,6 +355,28 @@ class ServerContext:
         st["state_ts"] = time.time()
         self.log(f"客户端 {st.get('ip') or '?'} ({self._fmt_mac(key)}) {logtxt}")
 
+    def client_vnc(self, mac, port, state):
+        """PE 内 VNC 服务端状态回报：state = online / offline，port 为 VNC 端口。
+
+        供 Web 界面显示"远程控制"入口；客户端整体下线时由 _check_online 联动清空。
+        """
+        key = self._norm_mac(mac)
+        st = self._client_state.get(key)
+        if st is None:
+            return  # 未经 DHCP 建档的客户端不登记 VNC
+        port = max(1, min(65535, int(port or 5900)))
+        online = state == "online" or state == "1" or state == "on"
+        st["vnc"] = {
+            "port": port,
+            "state": "online" if online else "offline",
+            "ts": time.time(),
+        }
+        if online:
+            self.log(f"客户端 {st.get('ip') or '?'} ({self._fmt_mac(key)}) "
+                     f"VNC 已就绪（端口 {port}），可远程控制")
+        else:
+            self.log(f"客户端 {st.get('ip') or '?'} ({self._fmt_mac(key)}) VNC 已停止")
+
     # ---------------- 已上线客户端下线检测 ----------------
     def _ping(self, ip):
         try:
@@ -365,6 +401,8 @@ class ServerContext:
             if state == "已上线" and not alive:
                 st["state"] = "已下线"
                 st["state_ts"] = time.time()
+                if st.get("vnc"):
+                    st["vnc"]["state"] = "offline"
                 self.log(f"客户端 {ip} ({st['mac']}) 已下线{seq:03d}号")
             elif state == "已下线" and alive:
                 st["state"] = "已上线"
@@ -541,8 +579,17 @@ class ServerContext:
         }
 
     def _clients_dedup(self):
-        """客户端状态列表（按首次 DHCP 出现的顺序），每条含当前引导状态。"""
-        return list(self._client_state.values())[:50]
+        """客户端状态列表（按首次 DHCP 出现的顺序），每条含当前引导状态。
+
+        st 内部 ips 是 set（历史 IP 去重），JSON 序列化前转成排序列表。
+        """
+        out = []
+        for st in list(self._client_state.values())[:50]:
+            item = dict(st)
+            if isinstance(item.get("ips"), set):
+                item["ips"] = sorted(item["ips"])
+            out.append(item)
+        return out
 
     # ---------------- 启动 / 停止 ----------------
     def start(self):

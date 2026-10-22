@@ -15,10 +15,26 @@ import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import vncproxy
 from .iso9660 import read_iso_index, _norm
 
 # ISO 内部大文件（.wim/.sdi）提取缓存目录：<项目目录>\boot_files
 _CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "boot_files")
+
+# noVNC 静态资源 MIME 类型（web/vnc/ 目录）
+_VNC_CTYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+    ".svg": "image/svg+xml",
+    ".map": "application/json",
+    ".json": "application/json",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".wasm": "application/wasm",
+}
 
 
 class ApiError(Exception):
@@ -491,6 +507,8 @@ class PxeHttpHandler(BaseHTTPRequestHandler):
             return "引导覆盖配置操作"
         if p == "/api/online":
             return "客户端上线通知"
+        if p == "/api/vnc":
+            return "客户端 VNC 状态回报"
         if p == "/api/step":
             return None   # 静默：PE 步骤回报由 client_step 统一记日志
         if p == "/api/upload":
@@ -577,12 +595,99 @@ class PxeHttpHandler(BaseHTTPRequestHandler):
         finally:
             ctx.unsubscribe_log(q)
 
+    # ---------------- VNC 远程控制（noVNC WebSocket 代理）----------------
+    def _vnc_origin_ok(self):
+        """反跨站 WebSocket 劫持：仅允许同源或本机来源的页面连接。"""
+        origin = self.headers.get("Origin", "")
+        if not origin:
+            return True  # 非浏览器客户端（如脚本）无 Origin
+        try:
+            o = urllib.parse.urlparse(origin)
+            if o.scheme not in ("http", "https"):
+                return False
+            netloc = o.netloc
+            host = self.headers.get("Host", "")
+            if netloc == host:
+                return True
+            host_part = netloc.rsplit(":", 1)[0] if ":" in netloc else netloc
+            if host_part in ("localhost", "127.0.0.1", "::1"):
+                return True
+        except Exception:
+            return False
+        return False
+
+    def _handle_vnc_ws(self):
+        """WebSocket 升级并桥接到客户机 VNC：/vnc/ws?host=<ip>&port=<5900>。
+
+        端口限制 5900-5999（VNC 常用段），配合 Origin 校验防止被当作
+        任意 TCP 隧道滥用。会话空闲 300 秒自动断开。
+        """
+        import ipaddress
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        host = (qs.get("host") or [""])[0].strip()
+        port_s = (qs.get("port") or [""])[0].strip() or "5900"
+        try:
+            port = int(port_s)
+        except ValueError:
+            return self._error(400, "invalid vnc port")
+        if not host or not (5900 <= port <= 5999):
+            return self._error(400, "invalid vnc target (host + port 5900-5999)")
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            return self._error(400, "invalid vnc host")
+        if not self._vnc_origin_ok():
+            return self._error(403, "origin not allowed")
+        key = self.headers.get("Sec-WebSocket-Key", "")
+        if not key:
+            return self._error(400, "missing Sec-WebSocket-Key")
+        # noVNC 请求子协议 "binary"；浏览器要求服务端必须选择并回显，
+        # 否则握手失败（"Sent non-empty Sec-WebSocket-Protocol header but no response"）
+        subproto = self.headers.get("Sec-WebSocket-Protocol", "")
+        if subproto:
+            subproto = subproto.split(",")[0].strip()
+        tcp = None
+        try:
+            tcp = socket.create_connection((host, port), timeout=8)
+            tcp.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError as e:
+            self.ctx.log(f"VNC 连接失败 {host}:{port} ({e})")
+            return self._error(502, f"无法连接 VNC 服务 {host}:{port}")
+        self.send_response(101, "Switching Protocols")
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", vncproxy.accept_key(key))
+        if subproto:
+            self.send_header("Sec-WebSocket-Protocol", subproto)
+        self.end_headers()
+        self.close_connection = True
+        try:
+            self.connection.settimeout(300)  # 空闲 5 分钟自动回收死会话
+        except OSError:
+            pass
+        # VNC 会话日志用 log_progress 同 key 覆盖：进行中/结束各一条，
+        # 结束后日志区只保留最新 1 条 VNC 日志（同 key 刷新，不追加堆积）
+        vkey = f"vnc:{host}:{port}"
+        self.ctx.log_progress(vkey, f"远程控制 {host}:{port} 会话中")
+        try:
+            vncproxy.run_proxy(
+                self.rfile, self.wfile, tcp,
+                log=lambda m: self.ctx.log_progress(
+                    vkey, f"远程控制 {host}:{port} {m}"))
+        finally:
+            try:
+                tcp.close()
+            except OSError:
+                pass
+        return None
+
     def do_GET(self):
         p = self.path.split("?", 1)[0]
         if p == "/api/logs/stream":
             self._handle_log_stream()
             return
-        quiet = p in ("/api/status", "/api/isos", "/api/pxe-fail", "/api/online")
+        quiet = p in ("/api/status", "/api/isos", "/api/pxe-fail", "/api/online",
+                      "/api/vnc", "/api/step", "/vnc/ws")
         desc = None if quiet else self._log_desc(self.path)
         _ip = self.client_address[0] if self.client_address else "-"
         try:
@@ -612,7 +717,8 @@ class PxeHttpHandler(BaseHTTPRequestHandler):
 
     def do_HEAD(self):
         p = self.path.split("?", 1)[0]
-        quiet = p in ("/api/status", "/api/isos", "/api/pxe-fail", "/api/online")
+        quiet = p in ("/api/status", "/api/isos", "/api/pxe-fail", "/api/online",
+                      "/api/vnc", "/api/step", "/vnc/ws")
         desc = None if quiet else self._log_desc(self.path)
         _ip = self.client_address[0] if self.client_address else "-"
         try:
@@ -682,6 +788,21 @@ class PxeHttpHandler(BaseHTTPRequestHandler):
                 return self._send_file(os.path.join(ctx.web_dir, name), ctype,
                                        allow_range=False)
 
+        # ---- VNC 远程控制 ----
+        if method == "GET" and path == "/vnc/ws":
+            return self._handle_vnc_ws()
+
+        # ---- noVNC 静态资源（web/vnc/ 目录）----
+        if method in ("GET", "HEAD") and path.startswith("/vnc/"):
+            rel = path[len("/vnc/"):]
+            root = os.path.abspath(os.path.join(ctx.web_dir, "vnc"))
+            cand = os.path.abspath(os.path.join(root, rel))
+            if not cand.startswith(root + os.sep) or not os.path.isfile(cand):
+                raise ApiError(404, "not found")
+            ctype = _VNC_CTYPES.get(os.path.splitext(rel)[1].lower(),
+                                   "application/octet-stream")
+            return self._send_file(cand, ctype, allow_range=False)
+
         # ---- PXE 挂载脚本（PE 内一行命令执行）----
         if method in ("GET", "HEAD") and path in ("/pxe/mount.ps1", "/pxe/mount.bat"):
             iso = (qs.get("iso") or [""])[0]
@@ -747,6 +868,16 @@ class PxeHttpHandler(BaseHTTPRequestHandler):
                 ctx.client_step(mac, step)
                 return self._json({"ok": True})
             raise ApiError(400, "mac/step required")
+
+        # ---- PE 内 VNC 服务端状态回报（mac + port + state=online/offline）----
+        if path == "/api/vnc" and method in ("GET", "HEAD"):
+            mac = (qs.get("mac") or [""])[0]
+            port = (qs.get("port") or [""])[0] or str(ctx.config.vnc_port)
+            state = (qs.get("state") or [""])[0].lower() or "online"
+            if mac:
+                ctx.client_vnc(mac, port, state)
+                return self._json({"ok": True})
+            raise ApiError(400, "mac required")
 
         # ---- iPXE 引导失败回报（下载失败/超时自动重启前调用，记录日志）----
         if path == "/api/pxe-fail" and method in ("GET", "HEAD"):

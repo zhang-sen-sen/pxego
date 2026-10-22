@@ -1,5 +1,4 @@
-﻿﻿# -*- coding: utf-8 -*-
-# PXE 网络引导服务器 —— 桌面启动器（PowerShell WinForms）
+﻿# PXE 网络引导服务器 —— 桌面启动器（PowerShell WinForms）
 # 运行：双击 launcher.cmd，或 powershell -ExecutionPolicy Bypass -File launcher.ps1
 # 自检：powershell -ExecutionPolicy Bypass -File launcher.ps1 -SelfTest
 
@@ -49,6 +48,22 @@ $DIM   = [System.Drawing.Color]::FromArgb(154, 154, 174)
 $GREEN = [System.Drawing.Color]::FromArgb(0, 230, 118)
 $RED   = [System.Drawing.Color]::FromArgb(255, 82, 82)
 $BTN   = [System.Drawing.Color]::FromArgb(38, 38, 51)
+$HOVER = [System.Drawing.Color]::FromArgb(49, 49, 66)    # 按钮悬停
+$PRESS = [System.Drawing.Color]::FromArgb(58, 58, 80)    # 按钮按下
+$BORDER = [System.Drawing.Color]::FromArgb(58, 58, 74)   # 卡片描边
+
+# 按钮悬停/卡片描边工具（必须在控件创建前定义）
+function Set-BtnHover($b, $hover, $press) {
+    $b.FlatAppearance.MouseOverBackColor = $hover
+    $b.FlatAppearance.MouseDownBackColor = $press
+}
+function Add-CardBorder($panel) {
+    $panel.add_Paint({
+        param($s, $e)
+        $g = $e.Graphics
+        $g.DrawRectangle((New-Object System.Drawing.Pen($BORDER)), 0, 0, $panel.Width - 1, $panel.Height - 1)
+    })
+}
 
 # ---------------- 窗体 ----------------
 $form = New-Object System.Windows.Forms.Form
@@ -114,6 +129,7 @@ $card = New-Object System.Windows.Forms.Panel
 $card.Size = New-Object System.Drawing.Size(300, 82)
 $card.Location = New-Object System.Drawing.Point(60, 242)
 $card.BackColor = $BG2
+Add-CardBorder $card
 $form.Controls.Add($card)
 
 $lblDot = New-Object System.Windows.Forms.Label
@@ -161,6 +177,7 @@ $script:nicCount = $script:nics.Count
 $script:nicH = 56
 $script:nicPanel.Size = New-Object System.Drawing.Size(300, $script:nicH)
 $script:nicPanel.Location = New-Object System.Drawing.Point(60, 332)
+Add-CardBorder $script:nicPanel
 $form.Controls.Add($script:nicPanel)
 
 $nicTitle = New-Object System.Windows.Forms.Label
@@ -214,6 +231,7 @@ $script:portPanel = New-Object System.Windows.Forms.Panel
 $script:portPanel.BackColor = $BG2
 $script:portPanel.Size = New-Object System.Drawing.Size(300, 130)
 $script:portPanel.Location = New-Object System.Drawing.Point(60, (332 + $script:nicH + 8))
+Add-CardBorder $script:portPanel
 $form.Controls.Add($script:portPanel)
 
 $portTitle = New-Object System.Windows.Forms.Label
@@ -249,7 +267,7 @@ function New-PortBox($val, $x, $y, $readonly) {
     return $pt
 }
 
-# 行1：HTTP（可改） + RCLONE（固定 8081），同一行不换行
+# 行1：HTTP（可改）
 $script:txtHttp = New-Object System.Windows.Forms.TextBox
 $script:portPanel.Controls.Add((New-PortLabel "HTTP :" 14 26))
 $script:txtHttp.Text = [string]$cfg.port
@@ -260,9 +278,6 @@ $script:txtHttp.BorderStyle = "FixedSingle"
 $script:txtHttp.Size = New-Object System.Drawing.Size(56, 22)
 $script:txtHttp.Location = New-Object System.Drawing.Point(80, 26)
 $script:portPanel.Controls.Add($script:txtHttp)
-$script:portPanel.Controls.Add((New-PortLabel "RCLONE：" 140 26))
-$txtRclone = New-PortBox 8081 206 26 $true
-$script:portPanel.Controls.Add($txtRclone)
 
 # 行2：TFTP（固定）+ DHCP（固定）
 $script:txtTftp = New-Object System.Windows.Forms.TextBox
@@ -289,6 +304,11 @@ $script:txtDhcp.BorderStyle = "FixedSingle"
 $script:txtDhcp.Size = New-Object System.Drawing.Size(56, 22)
 $script:txtDhcp.Location = New-Object System.Drawing.Point(206, 50)
 $script:portPanel.Controls.Add($script:txtDhcp)
+
+# 行1 右侧：RCLONE 后端（8081，固定），供 PE 内 Z 盘映射使用
+$script:portPanel.Controls.Add((New-PortLabel "RCLONE :" 140 26))
+$txtRclone2 = New-PortBox 8081 206 26 $true
+$script:portPanel.Controls.Add($txtRclone2)
 
 # 行3：DHCP 模式（完整DHCP/代理DHCP/关闭），与 Web 管理界面一致
 $script:portPanel.Controls.Add((New-PortLabel "DHCP模式" 14 74))
@@ -360,8 +380,9 @@ $btnPorts.BackColor = $BTN
 $btnPorts.FlatStyle = "Flat"
 $btnPorts.FlatAppearance.BorderSize = 0
 $btnPorts.Size = New-Object System.Drawing.Size(58, 26)
-$btnPorts.Location = New-Object System.Drawing.Point(12, 100)
+$btnPorts.Location = New-Object System.Drawing.Point(12, 98)
 $btnPorts.Cursor = [System.Windows.Forms.Cursors]::Hand
+Set-BtnHover $btnPorts $HOVER $PRESS
 $btnPorts.add_Click({ Apply-Ports })
 $script:portPanel.Controls.Add($btnPorts)
 
@@ -373,8 +394,9 @@ $btnStop.BackColor = $BTN
 $btnStop.FlatStyle = "Flat"
 $btnStop.FlatAppearance.BorderSize = 0
 $btnStop.Size = New-Object System.Drawing.Size(58, 26)
-$btnStop.Location = New-Object System.Drawing.Point(74, 100)
+$btnStop.Location = New-Object System.Drawing.Point(74, 98)
 $btnStop.Cursor = [System.Windows.Forms.Cursors]::Hand
+Set-BtnHover $btnStop $HOVER $PRESS
 $btnStop.add_Click({ Stop-Project })
 $script:portPanel.Controls.Add($btnStop)
 
@@ -386,8 +408,9 @@ $btnScan.BackColor = $BTN
 $btnScan.FlatStyle = "Flat"
 $btnScan.FlatAppearance.BorderSize = 0
 $btnScan.Size = New-Object System.Drawing.Size(74, 26)
-$btnScan.Location = New-Object System.Drawing.Point(136, 100)
+$btnScan.Location = New-Object System.Drawing.Point(136, 98)
 $btnScan.Cursor = [System.Windows.Forms.Cursors]::Hand
+Set-BtnHover $btnScan $HOVER $PRESS
 $btnScan.add_Click({ Scan-Ports })
 $script:portPanel.Controls.Add($btnScan)
 
@@ -399,8 +422,9 @@ $btnKill.BackColor = $BTN
 $btnKill.FlatStyle = "Flat"
 $btnKill.FlatAppearance.BorderSize = 0
 $btnKill.Size = New-Object System.Drawing.Size(74, 26)
-$btnKill.Location = New-Object System.Drawing.Point(214, 100)
+$btnKill.Location = New-Object System.Drawing.Point(214, 98)
 $btnKill.Cursor = [System.Windows.Forms.Cursors]::Hand
+Set-BtnHover $btnKill $HOVER $PRESS
 $btnKill.add_Click({ Kill-Occupiers })
 $script:portPanel.Controls.Add($btnKill)
 
@@ -420,6 +444,11 @@ function New-Btn($text, $x, $w, $bg, $fg, $handler) {
     $b.Size = New-Object System.Drawing.Size($w, 42)
     $b.Location = New-Object System.Drawing.Point($x, 0)
     $b.Cursor = [System.Windows.Forms.Cursors]::Hand
+    # hover 提亮 / 按下回落
+    $hov = [System.Drawing.Color]::FromArgb(
+        [math]::Min(255, $bg.R + 16), [math]::Min(255, $bg.G + 16), [math]::Min(255, $bg.B + 16))
+    $b.FlatAppearance.MouseOverBackColor = $hov
+    $b.FlatAppearance.MouseDownBackColor = $bg
     $b.add_Click($handler)
     return $b
 }
@@ -444,7 +473,7 @@ function Update-State {
     $running = Test-Service
     if ($running) {
         $lblDot.ForeColor = $GREEN
-        $lblState.Text = "服务运行中：HTTP/TFTP/DHCP/RCLONE"
+        $lblState.Text = "服务运行中：HTTP/TFTP/DHCP"
         $lblUrl.Text = $script:ManageUrl
         $lblUrl.Visible = $true
         $btnOpen.Text = "  启动并打开  "

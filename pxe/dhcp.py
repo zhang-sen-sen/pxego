@@ -557,9 +557,19 @@ class DhcpServer:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        self.sock.bind(("0.0.0.0", port))
+        # 绑定启动网卡 IP（config.server_ip）而非 0.0.0.0：
+        # Hyper-V 默认交换机(ICS/SharedAccess)会占用 172.31.0.1:67，
+        # 绑 0.0.0.0 与它冲突导致 DHCP 无法启动；绑具体网卡 IP 与 ICS
+        # 各自绑定不同地址可共存，同时仍能收到发往该网卡的 DHCP 广播。
+        bind_host = self.config.server_ip
+        try:
+            self.sock.bind((bind_host, port))
+        except OSError:
+            # 配置 IP 不在本机/绑定失败时回退 0.0.0.0（无 ICS 冲突环境照常工作）
+            self.log(f"DHCP 绑定 {bind_host}:{port} 失败，回退 0.0.0.0:67")
+            self.sock.bind(("0.0.0.0", port))
         self.running = True
-        self.log(f"DHCP 服务器已启动 (模式={self.config.dhcp_mode}, 端口 {port})")
+        self.log(f"DHCP 服务器已启动 (模式={self.config.dhcp_mode}, 绑定 {bind_host}:{port})")
         while self.running:
             try:
                 data, addr = self.sock.recvfrom(4096)
