@@ -1,0 +1,4 @@
+# Windows 批处理与 PowerShell 脚本强制 CRLF（cmd.exe 无法正确解析 LF 换行的 .cmd/.bat）
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
