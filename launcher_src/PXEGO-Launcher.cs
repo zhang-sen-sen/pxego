@@ -426,7 +426,7 @@ namespace PXEGO {
             Text = "PXE 网络引导服务器";
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedSingle;
-            ClientSize = new Size(560, 544);
+            ClientSize = new Size(600, 620);
             BackColor = BG;
             Font = new Font("Microsoft YaHei UI", 9);
             MaximizeBox = false;
@@ -434,11 +434,11 @@ namespace PXEGO {
             // 标题
             Label title = new Label();
             title.Text = "PXE 网络引导服务器";
-            title.Font = new Font("Microsoft YaHei UI", 17, FontStyle.Bold);
+            title.Font = new Font("Microsoft YaHei UI", 18, FontStyle.Bold);
             title.ForeColor = FG;
             title.BackColor = BG;
-            title.Size = new Size(560, 40);
-            title.Location = new Point(0, 16);
+            title.Size = new Size(600, 44);
+            title.Location = new Point(0, 20);
             title.TextAlign = ContentAlignment.MiddleCenter;
             Controls.Add(title);
 
@@ -447,15 +447,15 @@ namespace PXEGO {
             sub.Font = new Font("Microsoft YaHei UI", 10);
             sub.ForeColor = DIM;
             sub.BackColor = BG;
-            sub.Size = new Size(560, 26);
-            sub.Location = new Point(0, 60);
+            sub.Size = new Size(600, 28);
+            sub.Location = new Point(0, 68);
             sub.TextAlign = ContentAlignment.MiddleCenter;
             Controls.Add(sub);
 
             // 状态卡
             Panel card = new Panel();
-            card.Size = new Size(420, 100);
-            card.Location = new Point(70, 96);
+            card.Size = new Size(440, 110);
+            card.Location = new Point(80, 104);
             card.BackColor = BG2;
             card.Paint += delegate(object s, PaintEventArgs e) {
                 e.Graphics.DrawRectangle(new Pen(BORDER), 0, 0, card.Width - 1, card.Height - 1);
@@ -468,7 +468,7 @@ namespace PXEGO {
             lblDot.ForeColor = RED;
             lblDot.BackColor = BG2;
             lblDot.Size = new Size(24, 26);
-            lblDot.Location = new Point(20, 12);
+            lblDot.Location = new Point(20, 14);
             card.Controls.Add(lblDot);
 
             lblState = new Label();
@@ -476,8 +476,8 @@ namespace PXEGO {
             lblState.Font = new Font("Microsoft YaHei UI", 11, FontStyle.Bold);
             lblState.ForeColor = FG;
             lblState.BackColor = BG2;
-            lblState.Size = new Size(380, 26);
-            lblState.Location = new Point(52, 12);
+            lblState.Size = new Size(400, 26);
+            lblState.Location = new Point(56, 14);
             card.Controls.Add(lblState);
 
             lblUrl = new Label();
@@ -485,8 +485,8 @@ namespace PXEGO {
             lblUrl.Font = new Font("Consolas", 11);
             lblUrl.ForeColor = GREEN;
             lblUrl.BackColor = BG2;
-            lblUrl.Size = new Size(380, 24);
-            lblUrl.Location = new Point(20, 44);
+            lblUrl.Size = new Size(400, 24);
+            lblUrl.Location = new Point(20, 48);
             lblUrl.Visible = false;
             card.Controls.Add(lblUrl);
 
@@ -495,15 +495,15 @@ namespace PXEGO {
             lblPorts.Font = new Font("Consolas", 10);
             lblPorts.ForeColor = DIM;
             lblPorts.BackColor = BG2;
-            lblPorts.Size = new Size(380, 22);
-            lblPorts.Location = new Point(20, 70);
+            lblPorts.Size = new Size(400, 24);
+            lblPorts.Location = new Point(20, 78);
             card.Controls.Add(lblPorts);
 
             // 网卡卡
             nicPanel = new Panel();
             nicPanel.BackColor = BG2;
-            nicPanel.Size = new Size(420, 70);
-            nicPanel.Location = new Point(70, 204);
+            nicPanel.Size = new Size(440, 80);
+            nicPanel.Location = new Point(80, 222);
             nicPanel.Paint += delegate(object s, PaintEventArgs e) {
                 e.Graphics.DrawRectangle(new Pen(BORDER), 0, 0, nicPanel.Width - 1, nicPanel.Height - 1);
             };
@@ -514,8 +514,8 @@ namespace PXEGO {
             nicTitle.Font = new Font("Microsoft YaHei UI", 10, FontStyle.Bold);
             nicTitle.ForeColor = FG;
             nicTitle.BackColor = BG2;
-            nicTitle.Size = new Size(380, 22);
-            nicTitle.Location = new Point(20, 10);
+            nicTitle.Size = new Size(400, 24);
+            nicTitle.Location = new Point(20, 12);
             nicPanel.Controls.Add(nicTitle);
 
             nicBox = new ComboBox();
@@ -524,8 +524,8 @@ namespace PXEGO {
             nicBox.BackColor = BG2;
             nicBox.ForeColor = FG;
             nicBox.Font = new Font("Microsoft YaHei UI", 10);
-            nicBox.Size = new Size(380, 28);
-            nicBox.Location = new Point(20, 36);
+            nicBox.Size = new Size(400, 30);
+            nicBox.Location = new Point(20, 42);
             nicBox.DropDownHeight = 320;
             nicBox.SelectedIndexChanged += delegate {
                 if (nicApplying) return;
@@ -537,8 +537,8 @@ namespace PXEGO {
             // 端口卡
             portPanel = new Panel();
             portPanel.BackColor = BG2;
-            portPanel.Size = new Size(420, 160);
-            portPanel.Location = new Point(70, 282);
+            portPanel.Size = new Size(440, 190);
+            portPanel.Location = new Point(80, 310);
             portPanel.Paint += delegate(object s, PaintEventArgs e) {
                 e.Graphics.DrawRectangle(new Pen(BORDER), 0, 0, portPanel.Width - 1, portPanel.Height - 1);
             };
@@ -549,29 +549,29 @@ namespace PXEGO {
             portTitle.Font = new Font("Microsoft YaHei UI", 10, FontStyle.Bold);
             portTitle.ForeColor = FG;
             portTitle.BackColor = BG2;
-            portTitle.Size = new Size(380, 22);
-            portTitle.Location = new Point(20, 10);
+            portTitle.Size = new Size(400, 24);
+            portTitle.Location = new Point(20, 12);
             portPanel.Controls.Add(portTitle);
 
-            txtHttp = NewPortBox(httpPort.ToString(), 100, 34, false, 70);
-            portPanel.Controls.Add(NewPortLabel("HTTP :", 20, 34, 70));
+            txtHttp = NewPortBox(httpPort.ToString(), 110, 44, false, 80);
+            portPanel.Controls.Add(NewPortLabel("HTTP :", 20, 44, 80));
             portPanel.Controls.Add(txtHttp);
-            portPanel.Controls.Add(NewPortLabel("RCLONE :", 220, 34, 70));
-            portPanel.Controls.Add(NewPortBox("8081", 300, 34, true, 70));
-            portPanel.Controls.Add(NewPortLabel("TFTP :", 20, 62, 70));
-            portPanel.Controls.Add(NewPortBox(tftpPort.ToString(), 100, 62, true, 70));
-            portPanel.Controls.Add(NewPortLabel("DHCP :", 220, 62, 70));
-            portPanel.Controls.Add(NewPortBox(dhcpPort.ToString(), 300, 62, true, 70));
+            portPanel.Controls.Add(NewPortLabel("RCLONE :", 240, 44, 90));
+            portPanel.Controls.Add(NewPortBox("8081", 340, 44, true, 80));
+            portPanel.Controls.Add(NewPortLabel("TFTP :", 20, 74, 80));
+            portPanel.Controls.Add(NewPortBox(tftpPort.ToString(), 110, 74, true, 80));
+            portPanel.Controls.Add(NewPortLabel("DHCP :", 240, 74, 90));
+            portPanel.Controls.Add(NewPortBox(dhcpPort.ToString(), 340, 74, true, 80));
 
-            portPanel.Controls.Add(NewPortLabel("DHCP模式", 20, 90, 70));
+            portPanel.Controls.Add(NewPortLabel("DHCP模式", 20, 104, 100));
             dhcpModeBox = new ComboBox();
             dhcpModeBox.DropDownStyle = ComboBoxStyle.DropDownList;
             dhcpModeBox.FlatStyle = FlatStyle.Flat;
             dhcpModeBox.BackColor = BTN;
             dhcpModeBox.ForeColor = FG;
-            dhcpModeBox.Font = new Font("Microsoft YaHei UI", 9);
-            dhcpModeBox.Size = new Size(300, 24);
-            dhcpModeBox.Location = new Point(100, 90);
+            dhcpModeBox.Font = new Font("Microsoft YaHei UI", 10);
+            dhcpModeBox.Size = new Size(300, 28);
+            dhcpModeBox.Location = new Point(130, 104);
             dhcpModeMap["完整DHCP（唯一服务器）"] = "dhcp";
             dhcpModeMap["代理DHCP（与路由器共存）"] = "proxy";
             dhcpModeMap["关闭"] = "off";
@@ -584,28 +584,28 @@ namespace PXEGO {
             }
             portPanel.Controls.Add(dhcpModeBox);
 
-            btnPorts = NewBtn("应用", 20, 120, 80, 30);
+            btnPorts = NewBtn("应用", 20, 140, 90, 34);
             btnPorts.Click += delegate { ApplyPorts(); };
             portPanel.Controls.Add(btnPorts);
-            btnStop = NewBtn("停止", 110, 120, 80, 30);
+            btnStop = NewBtn("停止", 120, 140, 90, 34);
             btnStop.Click += delegate { StopProject(); };
             portPanel.Controls.Add(btnStop);
-            btnScan = NewBtn("端口检测", 200, 120, 100, 30);
+            btnScan = NewBtn("端口检测", 220, 140, 100, 34);
             btnScan.Click += delegate { ScanPorts(); };
             portPanel.Controls.Add(btnScan);
-            btnKill = NewBtn("清理占用", 310, 120, 90, 30);
+            btnKill = NewBtn("清理占用", 330, 140, 90, 34);
             btnKill.Click += delegate { KillOccupiers(); };
             portPanel.Controls.Add(btnKill);
 
-            btnY = 282 + 160 + 12;
-            footY = btnY + 56;
+            btnY = 310 + 190 + 16;
+            footY = btnY + 60;
 
             // 按钮行
             Panel row = new Panel();
-            row.Size = new Size(560, 52);
+            row.Size = new Size(600, 58);
             row.Location = new Point(0, btnY);
             row.BackColor = BG;
-            btnOpen = NewBigBtn("  启动并打开  ", 60, 210, GREEN, Color.FromArgb(6, 43, 20));
+            btnOpen = NewBigBtn("  启动并打开  ", 70, 230, GREEN, Color.FromArgb(6, 43, 20));
             btnOpen.Click += delegate {
                 if (TestService()) { Process.Start(manageUrl); return; }
                 if (!StartService()) return;
@@ -613,11 +613,11 @@ namespace PXEGO {
                 Process.Start(manageUrl);
             };
             row.Controls.Add(btnOpen);
-            btnMin = NewBigBtn("  最小化  ", 285, 100, BTN, FG);
+            btnMin = NewBigBtn("  最小化  ", 320, 110, BTN, FG);
             btnMin.Font = new Font("Microsoft YaHei UI", 10);
             btnMin.Click += delegate { WindowState = FormWindowState.Minimized; };
             row.Controls.Add(btnMin);
-            btnExit = NewBigBtn("  退出  ", 400, 110, Color.FromArgb(58, 35, 35), Color.White);
+            btnExit = NewBigBtn("  退出  ", 450, 120, Color.FromArgb(58, 35, 35), Color.White);
             btnExit.Font = new Font("Microsoft YaHei UI", 10);
             btnExit.Click += delegate { StopService(); StopPortUsers(); Close(); };
             row.Controls.Add(btnExit);
@@ -629,12 +629,12 @@ namespace PXEGO {
             foot.Font = new Font("Consolas", 8);
             foot.ForeColor = Color.FromArgb(85, 85, 102);
             foot.BackColor = BG;
-            foot.Size = new Size(560, 18);
+            foot.Size = new Size(600, 18);
             foot.Location = new Point(0, footY);
             foot.TextAlign = ContentAlignment.MiddleCenter;
             Controls.Add(foot);
 
-            ClientSize = new Size(560, footY + 32);
+            ClientSize = new Size(600, footY + 34);
         }
 
         Label NewPortLabel(string text, int x, int y, int w) {
