@@ -118,6 +118,17 @@ function sortLogLines(lines) {
   return lines.sort((a, b) => tsOf(a) - tsOf(b));
 }
 
+function containsIp(low, ip) {
+  // 与服务端 _contains_ip 同规则：IP 后跟字母/数字视为更长地址，不算匹配
+  let idx = low.indexOf(ip);
+  while (idx !== -1) {
+    const after = idx + ip.length;
+    if (after >= low.length || !/[0-9a-z]/.test(low[after])) return true;
+    idx = low.indexOf(ip, idx + 1);
+  }
+  return false;
+}
+
 function isClientLog(line, ips, macColon, macPlain) {
   // 与服务端 _line_is_client 同规则：MAC 或任一历史 IP 关联判断日志行属于某客户端
   if (!line) return false;
@@ -127,10 +138,7 @@ function isClientLog(line, ips, macColon, macPlain) {
   if (macPlain && low.replace(/:/g, "").indexOf(macPlain) !== -1) return true;
   for (const ip of ips || []) {
     if (!ip) continue;
-    if (low.indexOf("[" + ip + "]") !== -1) return true;
-    if (low.indexOf("来自 " + ip + ":") !== -1 || low.indexOf("至 " + ip + ":") !== -1
-        || low.indexOf("来自 " + ip + " ") !== -1 || low.indexOf("至 " + ip + " ") !== -1) return true;
-    if (low.indexOf("客户端 " + ip + " (") !== -1) return true;
+    if (containsIp(low, ip)) return true;
   }
   return false;
 }

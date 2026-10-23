@@ -1,0 +1,14 @@
+#!ipxe
+# autoexec.ipxe —— iPXE 默认脚本（无内嵌脚本的 iPXE 启动后自动加载）
+# 流程：ifopen + dhcp 拿 IP → 直接 chain HTTP 引导脚本（写死 server IP，
+# 不依赖 option175：proxy 模式下 iPXE 拿到的 ACK 可能来自路由器、无 175，
+# 而 PXEGo 的 ACK 不带租约 IP 会被 iPXE 忽略）
+:start
+ifopen net0 || goto retry
+dhcp || goto retry
+chain http://192.168.10.9:8999/ipxe.cfg || goto retry
+exit
+:retry
+echo ==== autoexec.ipxe: boot failed, retrying ====
+sleep 3
+goto start

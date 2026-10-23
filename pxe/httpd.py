@@ -168,11 +168,15 @@ class PxeHttpHandler(BaseHTTPRequestHandler):
         remaining = target
         with open(path, "rb") as f:
             while remaining > 0:
-                chunk = f.read(min(1048576, remaining))
+                chunk = f.read(min(2048, remaining))
                 if not chunk:
                     break
                 self.wfile.write(chunk)
+                self.wfile.flush()
                 remaining -= len(chunk)
+                # iPXE 老 TCP 栈（g12798 / ge9ffd UNDI）接收窗口仅 16KB，
+                # 突发发送会撑满窗口后死等 ACK；间隔发送让客户端有 ACK 机会
+                time.sleep(0.01)
             if remaining > 0:
                 self.wfile.write(b"\x00" * remaining)
 

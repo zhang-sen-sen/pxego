@@ -13,6 +13,7 @@
 import ipaddress
 import socket
 import struct
+import sys
 import threading
 import time
 
@@ -210,12 +211,13 @@ def build_dhcp_reply(req, msg_type, yiaddr="0.0.0.0", siaddr="0.0.0.0",
     # option 66（TFTP 服务器名，文本格式）：部分固件忽略 siaddr 只认此选项。
     if siaddr != "0.0.0.0":
         opts += _opt(OPT_TFTP_SERVER, siaddr.encode())
-    # option 43（PXE 厂商选项，Intel PXE 2.1）。EDK2 的 PxeBcParseVendorOptions
-    # 直接从 value[0] 按子选项 TLV 解析，子选项 6（DiscoveryControl）置位使 offer
-    # 判定为 PXE10。值 0x08（bit3）= 禁用 prompt/menu：EDK2 的 PxeBcSelectBootPrompt
-    # 在"bit3 置位且存在 bootfile"时返回 EFI_ABORTED，从而跳过菜单与 BOOTSTRAP
-    # 中止检查，直接用 DHCP 提供的 bootfile 走 TFTP（这是让 UEFI 客户端直接引导
-    # 的标准做法；0x02 会导致客户端走默认菜单→BOOTSTRAP→中止）。
+    # option 43（PXE 厂商选项，Intel PXE 2.1）：
+    # 子选项 6（DiscoveryControl）置位使 offer 判定为 PXE10。
+    # 值 0x08（bit3）：EDK2/VMware 固件均按规范解释为"禁止 Boot Server
+    # Discovery，直接用 DHCP 提供的 66/67 引导"，配合 ACK 中的 bootfile
+    # 直接走 TFTP，不弹菜单。此前 NAS 上固件空转的根因是 proxy 模式只回
+    # Offer 不回 ACK（客户端最终只拿到路由器无 PXE 参数的 ACK），而非
+    # 该值本身；proxy 分支已改为同时响应 Request 回 ACK。
     opts += _opt(43, bytes([6, 1, 8]))
     # option 17（root path）：供 GRUB 的 grubnet 定位配置文件目录。
     # GRUB 加载 (tftp,$server)/<root-path>/grub.cfg；TFTP 动态生成
@@ -377,7 +379,35 @@ class DhcpServer:
 
         # ---- 代理模式：只处理 PXE/iPXE 客户端，只发引导选项 ----
         if mode == "proxy":
-            if mtype in (DHCP_DISCOVER,) and req.is_pxe_family:
+            if mtype in (DHCP_DISCOVER, DHCP_REQUEST) and req.is_pxe_family:
+                # 普通（非 iPXE）客户端在 DHCP 阶段只做标准 4 次握手，
+                # REQUEST 交给路由器处理（回 ACK 会与路由器抢租约）；但
+                # PXE 引导参数（43/66/67/175）必须让客户端在 ACK 中拿到，
+                # 否则固件/iPXE 只能收到路由器无 PXE 参数的 ACK → 无法引导。
+                # iPXE 内嵌脚本（dhcp → chain ${ipxe-script}）依赖 REQUEST
+                # 后收到带 option175 的 ACK；固件 PXE 栈依赖 ACK 中的 43/66/67。
+                # 对 iPXE 客户端的 REQUEST 回 ACK（yiaddr=0，不分配 IP，
+                # 不与路由器冲突，仅补充 PXE 参数）。
+                if mtype == DHCP_REQUEST and not req.is_ipxe:
+                    # 固件 PXE 栈的 REQUEST：也回代理 ACK（yiaddr=0 不分配
+                    # IP、不与路由器抢租约，仅补充 PXE 引导参数）。部分 UEFI
+                    # 固件（VMware）会把最后收到的 ACK 缓存为 DhcpAck 传给
+                    # iPXE；若只缓存路由器的 ACK（无 66/67/175），iPXE 拿不到
+                    # TFTP 服务器 → autoexec.ipxe Not found。回代理 ACK 让
+                    # iPXE 继承到 siaddr/66，从而从 TFTP 拉取 autoexec.ipxe。
+                    bootfile = self.config.bootfile_for_arch(req.client_arch or 0x00)
+                    opts = {
+                        OPT_SERVER_ID: cfg.get("server_ip"),
+                        OPT_VENDOR_CLASS: req.options.get(OPT_VENDOR_CLASS),
+                        OPT_IPXE_SCRIPT: ipxe_script,
+                    }
+                    reply = build_dhcp_reply(req, DHCP_ACK, yiaddr="0.0.0.0",
+                                             siaddr=cfg.get("server_ip"),
+                                             options=opts, bootfile=bootfile)
+                    self.stats["acks"] += 1
+                    dest = self._dest(req, None)
+                    self._note_client(req, None)
+                    return reply, dest, req.mac
                 bootfile = self.config.bootfile_for_arch(req.client_arch or 0x00)
                 # iPXE 重 DHCP（user class 'iPXE'）：bootfile 指向 HTTP 脚本
                 # ipxe.cfg（iPXE 的 netboot 支持 http URL，下载后按脚本执行，
@@ -394,11 +424,17 @@ class DhcpServer:
                     # iPXE 链式脚本地址（iPXE 客户端据此拉取 ipxe.cfg）
                     OPT_IPXE_SCRIPT: ipxe_script,
                 }
-                reply = build_dhcp_reply(req, DHCP_OFFER, yiaddr="0.0.0.0",
-                                         siaddr=cfg.get("server_ip"),
-                                         options=opts, bootfile=bootfile)
+                if mtype == DHCP_REQUEST:
+                    reply = build_dhcp_reply(req, DHCP_ACK, yiaddr="0.0.0.0",
+                                             siaddr=cfg.get("server_ip"),
+                                             options=opts, bootfile=bootfile)
+                    self.stats["acks"] += 1
+                else:
+                    reply = build_dhcp_reply(req, DHCP_OFFER, yiaddr="0.0.0.0",
+                                             siaddr=cfg.get("server_ip"),
+                                             options=opts, bootfile=bootfile)
+                    self.stats["offers"] += 1
                 dest = self._dest(req, None)
-                self.stats["offers"] += 1
                 self._note_client(req, None)
                 return reply, dest, req.mac
             return None
@@ -557,11 +593,16 @@ class DhcpServer:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        # 绑定启动网卡 IP（config.server_ip）而非 0.0.0.0：
-        # Hyper-V 默认交换机(ICS/SharedAccess)会占用 172.31.0.1:67，
-        # 绑 0.0.0.0 与它冲突导致 DHCP 无法启动；绑具体网卡 IP 与 ICS
-        # 各自绑定不同地址可共存，同时仍能收到发往该网卡的 DHCP 广播。
-        bind_host = self.config.server_ip
+        # 绑定策略：Windows 绑具体网卡 IP（config.server_ip）——Hyper-V 默认
+        # 交换机(ICS/SharedAccess)会占用 172.31.0.1:67，绑 0.0.0.0 与它冲突
+        # 导致 DHCP 无法启动；绑具体网卡 IP 与 ICS 各自绑定不同地址可共存，
+        # 且 Windows 绑具体 IP 仍能收到发往该网卡的 DHCP 广播。
+        # Linux/容器环境：绑 0.0.0.0 —— Linux 绑具体 IP 收不到发往
+        # 255.255.255.255 的全局广播（客户端 DHCP Discover 即全局广播）。
+        if sys.platform.startswith("linux"):
+            bind_host = "0.0.0.0"
+        else:
+            bind_host = self.config.server_ip
         try:
             self.sock.bind((bind_host, port))
         except OSError:

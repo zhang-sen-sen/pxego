@@ -9,6 +9,33 @@ import queue
 import re
 import threading
 import time
+from datetime import datetime, timedelta, timezone
+
+# 项目按中国内网使用，日志时间固定 UTC+8，避免容器系统时区（UTC）导致差 8 小时
+_CN_TZ = timezone(timedelta(hours=8))
+
+
+def _cn_now():
+    """返回 UTC+8 的当前时间（datetime，含微秒）。"""
+    return datetime.now(_CN_TZ)
+
+
+def _contains_ip(low, ip):
+    """日志行小写文本中是否“恰好”出现该 IPv4（后面不是字母/数字）。
+
+    覆盖 [IP]、至 ('IP', port)、来自 IP: 等全部格式；
+    ip 后跟数字/字母则视为更长的地址前缀，不算匹配（如 192.168.10.15 vs .153）。
+    """
+    start = 0
+    while True:
+        idx = low.find(ip, start)
+        if idx < 0:
+            return False
+        after = idx + len(ip)
+        if after < len(low) and low[after].isalnum():
+            start = idx + 1
+            continue
+        return True
 
 from . import grubcfg
 from .bootconf import BootConf, IsoRegistry
@@ -120,17 +147,18 @@ class ServerContext:
         # 已上线客户端的中间过程日志：仅保留上线成功相关，避免刷屏
         if self._is_online_client_log(msg):
             return
-        now = time.time()
-        ts = time.strftime("%H:%M:%S", time.localtime(now)) + f".{int(now * 1000) % 1000:03d}"
+        now = _cn_now()
+        ts = now.strftime("%H:%M:%S") + f".{now.microsecond // 1000:03d}"
         line = f"[{ts}] {msg}"
-        self._log_buf.append(line)
-        if self._log_file:
-            try:
-                with open(self._log_file, "a", encoding="utf-8") as f:
-                    f.write(line + "\n")
-            except OSError:
-                pass
+        # 文件追加与上线清理回写都持有 _log_lock，避免并发写竞态
         with self._log_lock:
+            self._log_buf.append(line)
+            if self._log_file:
+                try:
+                    with open(self._log_file, "a", encoding="utf-8") as f:
+                        f.write(line + "\n")
+                except OSError:
+                    pass
             for q in list(self._log_waiters):
                 try:
                     q.put_nowait(line)
@@ -163,8 +191,8 @@ class ServerContext:
         """
         if self._is_online_client_log(msg):
             return
-        now = time.time()
-        ts = time.strftime("%H:%M:%S", time.localtime(now)) + f".{int(now * 1000) % 1000:03d}"
+        now = _cn_now()
+        ts = now.strftime("%H:%M:%S") + f".{now.microsecond // 1000:03d}"
         line = f"[{ts}] {msg}"
         self._latest_progress[key] = line
         with self._log_lock:
@@ -180,7 +208,7 @@ class ServerContext:
         st = self._client_state.get(key)
         if st is None:
             st = {"mac": self._fmt_mac(key), "ip": info.get("ip"),
-                  "time": time.strftime("%H:%M:%S"), "arch": info.get("arch"),
+                  "time": _cn_now().strftime("%H:%M:%S"), "arch": info.get("arch"),
                   "hostname": info.get("hostname"),
                   "state": "正在获取引导配置", "state_ts": now,
                   "seq": self._seq_next, "ips": set()}
@@ -198,7 +226,7 @@ class ServerContext:
         if info.get("ip"):
             self._ip_mac[str(info["ip"])] = key
             st.setdefault("ips", set()).add(str(info["ip"]))
-        self._client_events.appendleft({"time": time.strftime("%H:%M:%S"),
+        self._client_events.appendleft({"time": _cn_now().strftime("%H:%M:%S"),
                                         "mac": self._fmt_mac(key), **info})
 
     def client_http_event(self, ip, step):
@@ -234,7 +262,7 @@ class ServerContext:
         if st is None:
             # 兜底：未经过 DHCP 建档（proxy 环境/建档缺失）也能登记上线
             st = {"mac": self._fmt_mac(key), "ip": ip,
-                  "time": time.strftime("%H:%M:%S"), "arch": None,
+                  "time": _cn_now().strftime("%H:%M:%S"), "arch": None,
                   "hostname": "", "state": "正在获取引导配置",
                   "state_ts": time.time(), "seq": self._seq_next}
             self._seq_next += 1
@@ -305,14 +333,44 @@ class ServerContext:
                     keep.append(line)
             self._log_buf.clear()
             self._log_buf.extend(keep)
+            # 同步清理 pxe.log 文件：只保留上线/下线状态行，
+            # 避免 tail 日志文件时看到已上线客户端的引导过程日志残留。
+            if self._log_file:
+                self._purge_log_file(ips, mac_colon, mac_plain)
         # 同时清掉该客户端的进度日志（合并显示时不再带回来）
         for k in list(self._latest_progress):
             if self._line_is_client(self._latest_progress[k], ips,
                                     mac_colon, mac_plain):
                 del self._latest_progress[k]
 
+    def _purge_log_file(self, ips, mac_colon, mac_plain):
+        """回写 pxe.log：清掉指定客户端的全部过程日志（保留上线/下线行）。
+
+        与 _log_buf 同规则（_line_is_client 匹配），保证文件与界面一致。
+        调用方须持有 _log_lock。
+        """
+        try:
+            with open(self._log_file, "r", encoding="utf-8") as f:
+                file_lines = f.readlines()
+            kept = []
+            for raw in file_lines:
+                line = raw.rstrip("\n")
+                if self._line_is_client(line, ips, mac_colon, mac_plain):
+                    if "已上线" in line or "已下线" in line:
+                        kept.append(raw)
+                else:
+                    kept.append(raw)
+            with open(self._log_file, "w", encoding="utf-8") as f:
+                f.writelines(kept)
+        except OSError:
+            pass
+
     def _line_is_client(self, line, ips, mac_colon, mac_plain):
-        """判断日志行是否属于指定客户端（MAC 或任意历史 IP 关联）。"""
+        """判断日志行是否属于指定客户端（MAC 或任意历史 IP 关联）。
+
+        IP 用“包含 + 边界”匹配：覆盖 [IP]、至 ('IP', port)、来自 IP:、客户端 IP ( 等
+        所有日志格式；同时避免 192.168.10.15 误匹配 192.168.10.153。
+        """
         if not line:
             return False
         low = line.lower()
@@ -324,13 +382,7 @@ class ServerContext:
         for ip in (ips or []):
             if not ip:
                 continue
-            # 日志行格式为 [时间] [IP] ...，用包含匹配
-            if "[" + ip + "]" in low:
-                return True
-            if ("来自 " + ip + ":" in low or "至 " + ip + ":" in low
-                    or "来自 " + ip + " " in low or "至 " + ip + " " in low):
-                return True
-            if "客户端 " + ip + " (" in low:
+            if _contains_ip(low, ip):
                 return True
         return False
 
@@ -379,11 +431,20 @@ class ServerContext:
 
     # ---------------- 已上线客户端下线检测 ----------------
     def _ping(self, ip):
+        """探测客户端是否在线。
+        Linux 容器内没有 ping 命令（精简镜像），改用 TCP 连接探测：
+        优先 VNC 5900（PE 在线且 VNC 就绪的强信号），回退常见 Windows 端口。
+        """
         try:
-            import subprocess
-            r = subprocess.run(["ping", "-n", "1", "-w", "1000", ip],
-                               capture_output=True, timeout=3)
-            return r.returncode == 0
+            import socket
+            for port in (5900, 135, 139, 445):
+                try:
+                    s = socket.create_connection((ip, port), timeout=1.5)
+                    s.close()
+                    return True
+                except OSError:
+                    continue
+            return False
         except Exception:
             return False
 
@@ -408,6 +469,10 @@ class ServerContext:
                 st["state"] = "已上线"
                 st["state_ts"] = time.time()
                 self._ever_online.add(key)
+                # PE 若回报过 VNC 端口，恢复上线时同步恢复 VNC 在线（PE 未重启的话
+                # TightVNC 仍在监听；下次 PE 回报会刷新真实状态）
+                if st.get("vnc") and st["vnc"].get("port"):
+                    st["vnc"]["state"] = "online"
                 self.log(f"客户端 {ip} ({st['mac']}) 已上线{seq:03d}号")
 
     def _monitor_loop(self):

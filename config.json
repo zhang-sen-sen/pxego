@@ -1,44 +1,40 @@
 {
-    "dhcp_enable":  true,
-    "netmask":  "255.255.255.0",
-    "dns":  "",
-    "domain":  "",
-    "lease_time":  7200,
-    "mac_filter":  {
-                       "mode":  "off",
-                       "list":  [
-
-                                ]
-                   },
-    "menu":  {
-                 "title":  "PXE Boot Menu",
-                 "timeout":  10,
-                 "default":  "",
-                 "background":  ""
-             },
-    "iso_dirs":  [
-                     "isos"
-                 ],
-    "boot_dir":  "boot",
-    "web_dir":  "web",
-    "password":  "",
-    "log_lines":  200,
-    "pe_wim":  {
-                   "label":  "PE 维护系统",
-                   "wim":  "boot/BOOT.WIM",
-                   "efi_boot":  "boot/bootmgfw.efi",
-                   "bcd":  "boot/BCD",
-                   "sdi":  "boot/boot.sdi"
-               },
-    "mount_share":  "ISOS",
-    "server_ip":  "192.168.10.2",
-    "ip_pool":  {
-                    "start":  "192.168.10.100",
-                    "end":  "192.168.10.200"
-                },
-    "gateway":  "",
-    "dhcp_mode":  "proxy",
-    "http_port":  808,
-    "tftp_port":  69,
-    "dhcp_port":  67
+    "dhcp_enable": true,
+    "netmask": "255.255.255.0",
+    "dns": "",
+    "domain": "",
+    "lease_time": 7200,
+    "mac_filter": {
+        "mode": "off",
+        "list": []
+    },
+    "menu": {
+        "title": "PXE Boot Menu",
+        "timeout": 10,
+        "default": "",
+        "background": ""
+    },
+    "iso_dirs": [
+        "isos"
+    ],
+    "boot_dir": "boot",
+    "web_dir": "web",
+    "password": "",
+    "log_lines": 200,
+    "pe_wim": {
+        "label": "PE 维护系统",
+        "wim": "boot/BOOT.WIM",
+        "efi_boot": "boot/bootmgfw.efi",
+        "bcd": "boot/BCD",
+        "sdi": "boot/boot.sdi"
+    },
+    "mount_share": "ISOS",
+    "http_port": 8999,
+    "tftp_port": 69,
+    "dhcp_port": 67,
+    "vnc_port": 5900,
+    "server_ip": "192.168.10.9",
+    "ip_pool": { "start": "192.168.10.100", "end": "192.168.10.200" },
+    "gateway": "",
+    "dhcp_mode": "proxy"
 }

@@ -28,9 +28,9 @@ ERR_ILLEGAL = 4
 ERR_OPTION = 8
 
 DEFAULT_BLKSIZE = 512
-MAX_BLKSIZE = 8192
-TIMEOUT = 2.0
-MAX_RETRIES = 6
+MAX_BLKSIZE = 16384
+TIMEOUT = 3.0
+MAX_RETRIES = 8
 
 
 class TftpServer:
@@ -46,13 +46,31 @@ class TftpServer:
         self._lock = threading.Lock()
 
     # ---------------- 文件解析 ----------------
+    def _warm_boot_wim(self):
+        """BOOT.WIM 启动预热到内存：706MB 大文件逐块 seek+read 在群晖 NAS 上
+        会因存储 IO 抖动中断（实测 2.5MB/s、中途断）。预热后全程内存传输，
+        速度回到网卡上限且不会中断。"""
+        try:
+            res = self._resolve("boot/BOOT.WIM")
+            if res and "path" in res:
+                with open(res["path"], "rb") as f:
+                    self._boot_wim_cache = f.read()
+                self.log("BOOT.WIM 已预热到内存 (%d MB)" % (len(self._boot_wim_cache) // 1024 // 1024))
+                return True
+        except Exception as e:
+            self.log("BOOT.WIM 预热失败: %s" % e)
+        return False
+
     def _resolve(self, filename):
         """解析 TFTP 路径到文件对象；防目录穿越。
 
         兼容 GRUB 的 (tftp)/boot/ 前缀：TFTP 根即 boot_dir，因此
         /boot/ipxe.efi 应映射为 boot_dir/ipxe.efi。
         """
+        # BOOT.WIM 已预热到内存时直接内存传输（避免 NAS 存储 IO 抖动中断）
         name = filename.replace("\\", "/").lstrip("/")
+        if "BOOT.WIM" in name and getattr(self, "_boot_wim_cache", None):
+            return {"data": self._boot_wim_cache, "name": name}
         if ".." in name.split("/") or "\x00" in name:
             return None
         root = os.path.abspath(self.config.boot_dir)
@@ -130,9 +148,28 @@ class TftpServer:
             try:
                 fh = open(res["path"], "rb")
                 size = os.path.getsize(res["path"])
-                def read(off, n):
-                    fh.seek(off)
-                    return fh.read(n)
+                if size >= 16 * 1024 * 1024:
+                    # 大文件（BOOT.WIM 706MB）预读优化：1MB 块读入内存再切片发送。
+                    # 逐块 seek+read 在群晖 NAS 上每块约 2.7ms（存储 IO 抖动），
+                    # 17 万次 IO 中途必然超时中断；1MB 预读把磁盘 IO 降到 ~700 次，
+                    # 传输速度回到网卡上限，中途卡顿概率降低两个数量级。
+                    _pread = bytearray(1024 * 1024)
+                    _pread_start = -1
+                    def read(off, n):
+                        nonlocal _pread, _pread_start
+                        start = off - (off % (1024 * 1024))
+                        if _pread_start != start:
+                            fh.seek(start)
+                            _pread = bytearray(fh.read(1024 * 1024))
+                            _pread_start = start
+                        rel = off - start
+                        if rel >= len(_pread):
+                            return b""
+                        return bytes(_pread[rel:rel + n])
+                else:
+                    def read(off, n):
+                        fh.seek(off)
+                        return fh.read(n)
             except OSError:
                 self._send_error(self.sock, addr, ERR_ACCESS, "cannot open file")
                 return
@@ -144,7 +181,14 @@ class TftpServer:
         if "blksize" in opts:
             try:
                 b = int(opts["blksize"])
-                blksize = min(max(b, 8), MAX_BLKSIZE)
+                # BOOT.WIM 大文件特判：16384 大块（v11 提速：块数减半）。
+                # 关键约束：iPXE TFTP 单会话块数上限 ~131069（实测 4096×131069=536MB
+                # 后客户端停止 ack），706MB 用 16384 时仅 43125 块，远低于上限，
+                # 理论耗时减半（UDP 分片 11 片/块，UNDI 可重组，实测 16384 可行）。
+                if "BOOT.WIM" in filename:
+                    blksize = MAX_BLKSIZE
+                else:
+                    blksize = min(max(b, 8), MAX_BLKSIZE)
                 ack_opts["blksize"] = str(blksize)
             except ValueError:
                 pass
@@ -165,6 +209,25 @@ class TftpServer:
                 fh.close()
             return
 
+        try:
+            import traceback as _tb
+            try:
+                self._transfer(tsock, addr, read, size, blksize, ack_opts, fh, filename)
+            except Exception:
+                self.log("TFTP 传输异常 %s %s: %s" % (filename, addr, _tb.format_exc()))
+                _tb.print_exc()
+        finally:
+            try:
+                tsock.close()
+            except OSError:
+                pass
+            if fh:
+                try:
+                    fh.close()
+                except OSError:
+                    pass
+
+    def _transfer(self, tsock, addr, read, size, blksize, ack_opts, fh, filename):
         try:
             if ack_opts:
                 oack = struct.pack("!H", OP_OACK)
@@ -208,10 +271,14 @@ class TftpServer:
                 if len(chunk) < blksize:
                     break
             self.stats["bytes"] += total
+            # 传输结果日志：确认大文件（BOOT.WIM）到底传了多少字节/块
+            self.log("TFTP 完成 %s 至 %s 共 %d 字节 %d 块 (blksize=%d)" % (filename, addr, total, block - 1, blksize))
         finally:
-            tsock.close()
             if fh:
-                fh.close()
+                try:
+                    fh.close()
+                except OSError:
+                    pass
 
     @staticmethod
     def _wait_ack(sock, addr, blockno, timeout=None):
@@ -235,6 +302,7 @@ class TftpServer:
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(("0.0.0.0", port))
         self.running = True
+        self._warm_boot_wim()
         self.log(f"TFTP 服务器已启动 (端口 {port})")
         while self.running:
             try:

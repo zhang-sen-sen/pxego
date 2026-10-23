@@ -236,6 +236,7 @@ def gen_ipxe_script(config, entries):
     server = config.server_ip
     http_port = config.http_port
     http_srv = f"http://${{server}}" + (f":{http_port}" if int(http_port) != 80 else "")
+    tftp_srv = f"tftp://${{server}}"
     wins = [e for e in entries if e["conf"].get("os_type") in ("windows", "windows_pe")]
     lines = ["#!ipxe",
              f"set server {server}",
@@ -274,13 +275,14 @@ def gen_ipxe_script(config, entries):
                 # linear：禁用 wimboot 默认的 paging（BIOS 下自动把数据重定位到
                 # 4GB 以上以容纳大 WIM）；VM/BIOS 实机 paging 重定位易失败导致
                 # "Bad CPIO magic / could not extract initrd files"。
-                f"kernel --timeout 30 {http_srv}/boot/wimboot linear || goto reboot",
-                # initrd 必须带"第二参数"（目标名）：iPXE 据此把文件正确
-                # 放入 initrd 内存盘；只写 --name 会导致 wimboot "Bad CPIO magic"
-                f"initrd --timeout 60 {http_srv}/boot/${{wbm}} ${{wbm}} || goto reboot",
-                f"initrd --timeout 60 {http_srv}/{pe_bcd} BCD || goto reboot",
-                f"initrd --timeout 60 {http_srv}/{pe_sdi} boot.sdi || goto reboot",
-                f"initrd --timeout 300 {http_srv}/{pe_wim} boot.wim || goto reboot",
+                f"kernel --timeout 30 {tftp_srv}/boot/wimboot linear || goto reboot",
+                # initrd 小文件走 TFTP（iPXE UNDI 在 VMware 上 HTTP/TCP 传输大文件易断，
+                # 小文件 TFTP 最稳）；BOOT.WIM 706MB 走 HTTP——NAS→宿主实测带宽 94MB/s，
+                # TFTP 停等协议在 iPXE UNDI 上吞吐仅 ~6MB/s（113 秒），HTTP 若可通则 ~8 秒。
+                f"initrd --timeout 60 {tftp_srv}/boot/${{wbm}} ${{wbm}} || goto reboot",
+                f"initrd --timeout 60 {tftp_srv}/{pe_bcd} BCD || goto reboot",
+                f"initrd --timeout 60 {tftp_srv}/{pe_sdi} boot.sdi || goto reboot",
+                f"initrd --timeout 900 {http_srv}/{pe_wim} boot.wim || goto reboot",
                 "boot || goto reboot",
                 ":reboot",
                 "echo ==== PXE boot failed or timed out, reporting then rebooting ====",
